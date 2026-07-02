@@ -16,14 +16,16 @@ import (
 	"github.com/tarm/serial"
 )
 
-// Geometrická konfigurace plotteru (v mm)
 const (
-	StepsPerMm = 200.0  // 3600 pulsů / 18 mm
-	MotorAX    = -380.0 // Levý motor X
-	MotorAY    = -450.0 // Levý motor Y
-	MotorBX    = 380.0  // Pravý motor X
-	MotorBY    = -450.0 // Pravý motor Y
+	StepsPerMm = 200.0
+	MotorAX    = -370.0 // Polovina ze 740 mm
+	MotorAY    = -450.0
+	MotorBX    = 370.0  // Polovina ze 740 mm
+	MotorBY    = -450.0
+
+	gondolaWidth = 55.0
 )
+
 
 var currentX float64 = 0.0
 var currentY float64 = 0.0
@@ -60,14 +62,17 @@ func moveLine(s *serial.Port, targetX, targetY float64) {
 	}
 
 	segments := math.Ceil(distance)
+	halfGondola := gondolaWidth / 2.0
 
 	for i := 1; i <= int(segments); i++ {
 		t := float64(i) / segments
 		interX := currentX + (targetX-currentX)*t
 		interY := currentY + (targetY-currentY)*t
 
-		distA := calculateDistance(interX, interY, MotorAX, MotorAY) * StepsPerMm
-		distB := calculateDistance(interX, interY, MotorBX, MotorBY) * StepsPerMm
+		// Tady se děje to softwarové kouzlo: 
+		// Výpočet délky řemenů upravený o šířku gondoly ze zavařovačky
+		distA := calculateDistance(interX-halfGondola, interY, MotorAX, MotorAY) * StepsPerMm
+		distB := calculateDistance(interX+halfGondola, interY, MotorBX, MotorBY) * StepsPerMm
 
 		cmd := fmt.Sprintf("X%dY%d\n", int(distB), int(distA))
 		_, err := s.Write([]byte(cmd))
@@ -95,7 +100,7 @@ func parseSVGPath(dAttr string) []Point {
 			currentCmd = match
 			continue
 		}
-		
+
 		val, err := strconv.ParseFloat(match, 64)
 		if err == nil {
 			coords = append(coords, val)
@@ -179,11 +184,10 @@ func main() {
 	}
 
 	if len(pathStrings) == 0 {
-		fmt.Println("⚠️  V souboru nebyly nalezeny žádné čáry.")
+		fmt.Println("V souboru nebyly nalezeny žádné čáry.")
 		return
 	}
 
-	// První průchod: Načtení bodů a zjištění obalového boxu (Bounding Box)
 	var shapes []Shape
 	minX, maxX := math.MaxFloat64, -math.MaxFloat64
 	minY, maxY := math.MaxFloat64, -math.MaxFloat64
@@ -204,13 +208,11 @@ func main() {
 	svgWidth := maxX - minX
 	svgHeight := maxY - minY
 
-	// Výpočet automatického měřítka
 	scale := 1.0
 	if *targetWidth > 0 && svgWidth > 0 {
 		scale = *targetWidth / svgWidth
 	}
 
-	// Výpočet středů pro automatické centrování
 	var finalOffsetX, finalOffsetY float64
 	if *autoCenter {
 		svgCenterX := minX + (svgWidth / 2.0)
@@ -222,12 +224,11 @@ func main() {
 		finalOffsetY = *offsetY
 	}
 
-	fmt.Printf("📊 Statistiky SVG:\n")
+	fmt.Printf("Statistiky SVG:\n")
 	fmt.Printf("   - Původní velikost v souboru: %.1fx%.1f jednotek\n", svgWidth, svgHeight)
 	fmt.Printf("   - Vypočtené měřítko pro A4:   %.4f\n", scale)
 	fmt.Printf("   - Výsledná fyzická velikost:  %.1fx%.1f mm\n", svgWidth*scale, svgHeight*scale)
 
-	// Připojení k Arduinu
 	c := &serial.Config{Name: "/dev/ttyUSB0", Baud: 115200}
 	s, err := serial.OpenPort(c)
 	if err != nil { log.Fatal("Nepodařilo se otevřít port:", err) }
@@ -235,7 +236,8 @@ func main() {
 
 	fmt.Println("Inicializace... Srovnej tužku přesně do STŘEDU kreslicí plochy [0,0]!")
 	time.Sleep(2 * time.Second)
-	fmt.Println("🚀 Startuji přesné kreslení...")
+	fmt.Println("Startuji přesné kreslení...")
+
 
 	for idx, shape := range shapes {
 		fmt.Printf("  -> Kreslím objekt %d/%d (body: %d)\n", idx+1, len(shapes), len(shape))
@@ -245,5 +247,10 @@ func main() {
 			moveLine(s, targetX, targetY)
 		}
 	}
-	fmt.Println("🏁 Hotovo! Obrázek v přesném měřítku dokončen.")
+
+	// 🏠 PUNK-UPGRADE: Návrat fixy zpět na střed po dokončení kreslení
+	fmt.Println("Kreslení dokončeno, vracím gondolu zpět na nulu [0,0]...")
+	moveLine(s, 0.0, 0.0)
+
+	fmt.Println("Hotovo! Obrázek v přesném měřítku dokončen.")
 }
