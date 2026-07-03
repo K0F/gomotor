@@ -1,92 +1,146 @@
-#include <AccelStepper.h>
+// 📌 Definice pinů pro CNC Shield V3
+const byte X_STEP_PIN = 2;
+const byte X_DIR_PIN = 5;
+const byte Y_STEP_PIN = 3;
+const byte Y_DIR_PIN = 6;
+const byte ENABLE_PIN = 8;
 
 // =========================================================================
-// CHYTRÁ KALIBRACE MIKROKROKOVÁNÍ
-// Sem zadej PŘESNĚ STEJNÉ číslo, jaké máš v Go kódu v proměnné StepsPerMm!
-// Pokud máš základní krok, je tu 200.0. Pokud máš mikrokroky, dej sem např. 1600.0 nebo 3200.0
-const float STEPS_PER_MM = 200.0; 
+// 🎛️ HARDWAROVÁ KONFIGURACE OS
+const bool INVERT_X = false; 
+const bool INVERT_Y = false; 
+
+// ⏱️ PARAMETRY AKCELERACE (Trapézová rampa)
+const unsigned int CRUISE_DELAY = 300; // Prodleva v maximální rychlosti (nižší = rychlejší)
+const unsigned int START_DELAY  = 1000; // Bezpečný, pomalý start z klidu (vyšší = pomalejší)
+const int RAMP_STEPS = 30;             // Počet kroků pro plný rozjezd a dojezd
 // =========================================================================
 
-AccelStepper Xaxis(1, 2, 5); 
-AccelStepper Yaxis(1, 3, 6); 
+long currentX = 0;
+long currentY = 0;
 
-const byte enablePin = 8;
 char serialBuffer[32];
 int bufIndex = 0;
-bool isMoving = false;
 
 void setup() {
-    pinMode(enablePin, OUTPUT);
-    digitalWrite(enablePin, LOW); // LOW povolí motory na CNC Shieldu
-
+    pinMode(X_STEP_PIN, OUTPUT);
+    pinMode(X_DIR_PIN, OUTPUT);
+    pinMode(Y_STEP_PIN, OUTPUT);
+    pinMode(Y_DIR_PIN, OUTPUT);
+    pinMode(ENABLE_PIN, OUTPUT);
+    
+    digitalWrite(ENABLE_PIN, LOW); // Zapnutí motorů
     Serial.begin(115200);
+}
 
-    // OPRAVA ČÍSLO 1: AKCELERACE A RYCHLOST
-    // Protože Go kód posílá čáry rozkouskované po 1 mm a čeká na "ok", nízká akcelerace
-    // způsobovala, že motor na každém milimetru zdlouhavě zrychloval a brzdil.
-    // To vedlo k šílenému škubání a deformaci obrazu. Nastavujeme "okamžitou" reakci.
-    Xaxis.setMaxSpeed(30000);
-    Xaxis.setAcceleration(999999.0); // Téměř nekonečná akcelerace, krokují hned
-    Yaxis.setMaxSpeed(30000);
-    Yaxis.setAcceleration(999999.0);
+void stepPlotter(long targetX, long targetY) {
+    long deltaX = targetX - currentX;
+    long deltaY = targetY - currentY;
 
-    // 💡 TIP FOR INVERSION: Pokud se ti po spuštění některý motor točí obráceně,
-    // odkomentuj jeden z následujících řádků (otočí směr softwarově):
-    // Xaxis.setPinsInverted(true, false, false);
-    // Yaxis.setPinsInverted(true, false, false);
+    long stepsX = abs(deltaX);
+    long stepsY = abs(deltaY);
 
-    // OPRAVA ČÍSLO 2: DYNAMICKÝ START (Proč mašina utíkala)
-    // Původní číslo 117796 natvrdo počítalo s 200 kroky na mm. Když jsi v Go kódu 
-    // změnil měřítko/mikrokroky, Go poslalo startovní pozici např. 942000, ale Arduino 
-    // si myslelo, že stojí na 117796. Rozdíl byl obří a mašina okamžitě vystřelila do rohu.
-    // Teď se startovní pozice dopočítá sama podle zadaných STEPS_PER_MM (vzdálenost ke středu je 588.98 mm).
-    long startSteps = 565.5 * STEPS_PER_MM;
-    Xaxis.setCurrentPosition(startSteps); 
-    Yaxis.setCurrentPosition(startSteps); 
+    if (stepsX == 0 && stepsY == 0) return;
+
+    int signX = (deltaX > 0) ? 1 : -1;
+    int signY = (deltaY > 0) ? 1 : -1;
+
+    digitalWrite(X_DIR_PIN, ((deltaX > 0) ^ INVERT_X) ? HIGH : LOW);
+    digitalWrite(Y_DIR_PIN, ((deltaY > 0) ^ INVERT_Y) ? HIGH : LOW);
+
+    long maxSteps = max(stepsX, stepsY);
+    long overX = 0;
+    long overY = 0;
+
+    // 📐 Optimalizované nastavení rampy
+    long actualRamp = min((long)RAMP_STEPS, maxSteps / 2);
+    unsigned int currentDelay = START_DELAY;
+    
+    // Rozdíl rychlostí převedený na long pro akumulátor
+    long rampDelta = (long)(START_DELAY - CRUISE_DELAY);
+    long accError = 0;
+
+    for (long i = 0; i < maxSteps; i++) {
+        overX += stepsX;
+        overY += stepsY;
+
+        bool doStepX = false;
+        bool doStepY = false;
+
+        if (overX >= maxSteps) {
+            overX -= maxSteps;
+            digitalWrite(X_STEP_PIN, HIGH);
+            doStepX = true;
+            currentX += signX;
+        }
+        if (overY >= maxSteps) {
+            overY -= maxSteps;
+            digitalWrite(Y_STEP_PIN, HIGH);
+            doStepY = true;
+            currentY += signY;
+        }
+
+        delayMicroseconds(2); // Nutná šířka pulzu pro drivery
+
+        if (doStepX) digitalWrite(X_STEP_PIN, LOW);
+        if (doStepY) digitalWrite(Y_STEP_PIN, LOW);
+
+        // =========================================================================
+        // ⭐ ULTRA-RYCHLÁ RAMPA BEZ NÁSOBENÍ A DĚLENÍ (Bresenham style)
+        // =========================================================================
+        if (actualRamp > 0) {
+            if (i < actualRamp) {
+                // Plynulý rozjezd (snižování delaye pomocí sčítání chybové složky)
+                accError += rampDelta;
+                while (accError >= actualRamp) {
+                    currentDelay--;
+                    accError -= actualRamp;
+                }
+            } 
+            else if (i >= maxSteps - actualRamp) {
+                // Plynulé brzdění (zvyšování delaye)
+                if (i == maxSteps - actualRamp) {
+                    accError = 0; // Vynulování akumulátoru přesně na startu brzdné zóny
+                }
+                accError += rampDelta;
+                while (accError >= actualRamp) {
+                    currentDelay++;
+                    accError -= actualRamp;
+                }
+            } 
+            else {
+                currentDelay = CRUISE_DELAY;
+            }
+        } else {
+            currentDelay = CRUISE_DELAY;
+        }
+
+        // Bezpečnostní hardwarové limity rychlosti
+        if (currentDelay < CRUISE_DELAY) currentDelay = CRUISE_DELAY;
+        if (currentDelay > START_DELAY) currentDelay = START_DELAY;
+
+        delayMicroseconds(currentDelay);
+    }
 }
 
 void loop() {
-    Xaxis.run();
-    Yaxis.run();
-
     while (Serial.available() > 0) {
         char c = Serial.read();
         
         if (c == '\n' || c == '\r') {
             if (bufIndex > 0) {
                 long targetX = 0, targetY = 0;
-                long maxSpd = 0, spd = 0, accel = 0;
 
-                // Parsování pohybu
                 if (serialBuffer[0] == 'X' && sscanf(serialBuffer, "X%ldY%ld", &targetX, &targetY) == 2) {
-                    Xaxis.moveTo(targetX);
-                    Yaxis.moveTo(targetY);
-                    isMoving = true;
+                    stepPlotter(targetX, targetY);
+                    Serial.print("ok\n"); 
                 }
-                // Parsování konfigurace X
-                else if (serialBuffer[0] == 'Q' && sscanf(serialBuffer, "Q%ldW%ldE%ld", &maxSpd, &spd, &accel) == 3) {
-                    Xaxis.setMaxSpeed(maxSpd);
-                    Xaxis.setAcceleration(accel);
-                    Serial.print("ok\n");
-                }
-                // Parsování konfigurace Y
-                else if (serialBuffer[0] == 'A' && sscanf(serialBuffer, "A%ldS%ldD%ld", &maxSpd, &spd, &accel) == 3) {
-                    Yaxis.setMaxSpeed(maxSpd);
-                    Yaxis.setAcceleration(accel);
-                    Serial.print("ok\n");
-                }
-                bufIndex = 0; 
+                bufIndex = 0;
             }
         } 
         else if (bufIndex < 31) {
             serialBuffer[bufIndex++] = c;
             serialBuffer[bufIndex] = '\0';
         }
-    }
-
-    // Kontrola dojezdu
-    if (isMoving && Xaxis.distanceToGo() == 0 && Yaxis.distanceToGo() == 0) {
-        Serial.print("ok\n");
-        isMoving = false;
     }
 }

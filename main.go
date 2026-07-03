@@ -8,7 +8,7 @@ import (
 	"log"
 	"math"
 	"os"
-	"os/signal" // 🔄 NOVÉ: Import pro odchycení signálů OS
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
@@ -28,11 +28,11 @@ const (
 
 	// 3. VÝŠKA MOTORŮ (Změř svisle od motorů dolů do PŘESNÉHO STŘEDU tvé A4 plochy)
 	// Pozor: Hodnota je teď KLADNÁ (+), protože motory jsou geometricky NAD papírem!
-	MotorAY = 230.0
-	MotorBY = 230.0
+	MotorAY = 420.0
+	MotorBY = 420.0
 
 	// 4. ROZTEČ DRÁTKŮ NA VÍČKU (v milimetrech mezi zelenými úchyty)
-	gondolaWidth = 0.0
+	gondolaWidth = 55.0
 
 	// Fixní definice formátu A4 na výšku
 	A4Width      = 210.0
@@ -169,7 +169,7 @@ func parseSVGPath(dAttr string) []Point {
 
 func main() {
 	svgFile := flag.String("file", "", "Cesta k SVG souboru")
-	autoCenter := flag.Bool("center", false, "Automaticky vycentrovat obrázek na střed [0,0]")
+	autoCenter := flag.Bool("center", true, "Automaticky vycentrovat obrázek na střed [0,0]")
 	offsetX := flag.Float64("offx", 0.0, "Dodatečný posun X v mm")
 	offsetY := flag.Float64("offy", 0.0, "Dodatečný posun Y v mm")
 	flag.Parse()
