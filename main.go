@@ -144,8 +144,12 @@ func parseSVGPath(dAttr string) []Point {
 					}
 					points = append(points, Point{X: coords[0], Y: coords[1], Mode: mode})
 					coords = []float64{}
-					if currentCmd == "M" { currentCmd = "L" }
-					if currentCmd == "m" { currentCmd = "l" }
+					if currentCmd == "M" {
+						currentCmd = "L"
+					}
+					if currentCmd == "m" {
+						currentCmd = "l"
+					}
 				}
 			}
 		}
@@ -184,14 +188,20 @@ func main() {
 
 	for {
 		token, err := decoder.Token()
-		if err == io.EOF { break }
-		if err != nil { log.Fatal("Chyba XML:", err) }
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Fatal("Chyba XML:", err)
+		}
 
 		switch se := token.(type) {
 		case xml.StartElement:
 			if se.Name.Local == "path" {
 				for _, attr := range se.Attr {
-					if attr.Name.Local == "d" { pathStrings = append(pathStrings, attr.Value) }
+					if attr.Name.Local == "d" {
+						pathStrings = append(pathStrings, attr.Value)
+					}
 				}
 			}
 			// ZDE SE POUŽÍVÁ numNumbers
@@ -218,13 +228,23 @@ func main() {
 
 	for _, pathD := range pathStrings {
 		pts := parseSVGPath(pathD)
-		if len(pts) == 0 { continue }
+		if len(pts) == 0 {
+			continue
+		}
 		shapes = append(shapes, pts)
 		for _, pt := range pts {
-			if pt.X < minX { minX = pt.X }
-			if pt.X > maxX { maxX = pt.X }
-			if pt.Y < minY { minY = pt.Y }
-			if pt.Y > maxY { maxY = pt.Y }
+			if pt.X < minX {
+				minX = pt.X
+			}
+			if pt.X > maxX {
+				maxX = pt.X
+			}
+			if pt.Y < minY {
+				minY = pt.Y
+			}
+			if pt.Y > maxY {
+				maxY = pt.Y
+			}
 		}
 	}
 
@@ -252,17 +272,29 @@ func main() {
 	sendCommand(s, fmt.Sprintf("F%.2f", *feed))
 
 	for _, shape := range shapes {
-		if globalInterrupted { break }
+		if globalInterrupted {
+			break
+		}
 		for _, pt := range shape {
-			if globalInterrupted { break }
+			if globalInterrupted {
+				break
+			}
 
 			plotterX := (pt.X-svgCenterX)*scale + *offsetX
 			plotterY := ((pt.Y - svgCenterY) * scale) + *offsetY
 
-			if plotterX > physLimitX { plotterX = physLimitX }
-			if plotterX < -physLimitX { plotterX = -physLimitX }
-			if plotterY > physLimitY { plotterY = physLimitY }
-			if plotterY < -physLimitY { plotterY = -physLimitY }
+			if plotterX > physLimitX {
+				plotterX = physLimitX
+			}
+			if plotterX < -physLimitX {
+				plotterX = -physLimitX
+			}
+			if plotterY > physLimitY {
+				plotterY = physLimitY
+			}
+			if plotterY < -physLimitY {
+				plotterY = -physLimitY
+			}
 
 			moveLine(s, plotterX, plotterY)
 		}
