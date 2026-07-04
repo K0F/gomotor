@@ -1,23 +1,21 @@
-// 📌 Definice pinů pro CNC Shield V3
 const byte X_STEP_PIN = 2;
-const byte X_DIR_PIN = 5;
+const byte X_DIR_PIN  = 5;
 const byte Y_STEP_PIN = 3;
-const byte Y_DIR_PIN = 6;
+const byte Y_DIR_PIN  = 6;
 const byte ENABLE_PIN = 8;
+const byte PEN_PIN    = 9;
 
-// =========================================================================
-// 🎛️ HARDWAROVÁ KONFIGURACE OS
 const bool INVERT_X = false; 
 const bool INVERT_Y = false; 
 
-// ⏱️ PARAMETRY AKCELERACE (Trapézová rampa)
-const unsigned int CRUISE_DELAY = 300; // Prodleva v maximální rychlosti (nižší = rychlejší)
-const unsigned int START_DELAY  = 1000; // Bezpečný, pomalý start z klidu (vyšší = pomalejší)
-const int RAMP_STEPS = 30;             // Počet kroků pro plný rozjezd a dojezd
-// =========================================================================
+// Parametry akcelerace (nyní proměnné)
+unsigned int cruiseDelay = 300; // Základní rychlost (nižší = rychlejší)
+const unsigned int START_DELAY = 1000;
+const int RAMP_STEPS = 10;
 
 long currentX = 0;
 long currentY = 0;
+float feedMult = 1.0; // Násobitel pro detailní práci
 
 char serialBuffer[32];
 int bufIndex = 0;
@@ -28,15 +26,16 @@ void setup() {
     pinMode(Y_STEP_PIN, OUTPUT);
     pinMode(Y_DIR_PIN, OUTPUT);
     pinMode(ENABLE_PIN, OUTPUT);
+    pinMode(PEN_PIN, OUTPUT);
     
-    digitalWrite(ENABLE_PIN, LOW); // Zapnutí motorů
+    digitalWrite(ENABLE_PIN, LOW);
+    digitalWrite(PEN_PIN, LOW);
     Serial.begin(115200);
 }
 
 void stepPlotter(long targetX, long targetY) {
     long deltaX = targetX - currentX;
     long deltaY = targetY - currentY;
-
     long stepsX = abs(deltaX);
     long stepsY = abs(deltaY);
 
@@ -52,12 +51,9 @@ void stepPlotter(long targetX, long targetY) {
     long overX = 0;
     long overY = 0;
 
-    // 📐 Optimalizované nastavení rampy
     long actualRamp = min((long)RAMP_STEPS, maxSteps / 2);
     unsigned int currentDelay = START_DELAY;
-    
-    // Rozdíl rychlostí převedený na long pro akumulátor
-    long rampDelta = (long)(START_DELAY - CRUISE_DELAY);
+    long rampDelta = (long)(START_DELAY - cruiseDelay);
     long accError = 0;
 
     for (long i = 0; i < maxSteps; i++) {
@@ -80,46 +76,37 @@ void stepPlotter(long targetX, long targetY) {
             currentY += signY;
         }
 
-        delayMicroseconds(2); // Nutná šířka pulzu pro drivery
+        delayMicroseconds(2);
 
         if (doStepX) digitalWrite(X_STEP_PIN, LOW);
         if (doStepY) digitalWrite(Y_STEP_PIN, LOW);
 
-        // =========================================================================
-        // ⭐ ULTRA-RYCHLÁ RAMPA BEZ NÁSOBENÍ A DĚLENÍ (Bresenham style)
-        // =========================================================================
         if (actualRamp > 0) {
             if (i < actualRamp) {
-                // Plynulý rozjezd (snižování delaye pomocí sčítání chybové složky)
                 accError += rampDelta;
                 while (accError >= actualRamp) {
                     currentDelay--;
                     accError -= actualRamp;
                 }
-            } 
-            else if (i >= maxSteps - actualRamp) {
-                // Plynulé brzdění (zvyšování delaye)
-                if (i == maxSteps - actualRamp) {
-                    accError = 0; // Vynulování akumulátoru přesně na startu brzdné zóny
-                }
+            } else if (i >= maxSteps - actualRamp) {
+                if (i == maxSteps - actualRamp) accError = 0;
                 accError += rampDelta;
                 while (accError >= actualRamp) {
                     currentDelay++;
                     accError -= actualRamp;
                 }
-            } 
-            else {
-                currentDelay = CRUISE_DELAY;
+            } else {
+                currentDelay = cruiseDelay;
             }
         } else {
-            currentDelay = CRUISE_DELAY;
+            currentDelay = cruiseDelay;
         }
 
-        // Bezpečnostní hardwarové limity rychlosti
-        if (currentDelay < CRUISE_DELAY) currentDelay = CRUISE_DELAY;
+        if (currentDelay < cruiseDelay) currentDelay = cruiseDelay;
         if (currentDelay > START_DELAY) currentDelay = START_DELAY;
 
-        delayMicroseconds(currentDelay);
+        // Aplikace zpomalení
+        delayMicroseconds((unsigned int)(currentDelay / feedMult));
     }
 }
 
@@ -129,12 +116,30 @@ void loop() {
         
         if (c == '\n' || c == '\r') {
             if (bufIndex > 0) {
-                long targetX = 0, targetY = 0;
-
-                if (serialBuffer[0] == 'X' && sscanf(serialBuffer, "X%ldY%ld", &targetX, &targetY) == 2) {
-                    stepPlotter(targetX, targetY);
-                    Serial.print("ok\n"); 
+                // Příkazy:
+                // X...Y... -> Pohyb
+                // P0/P1    -> Pero
+                // F0.5     -> Násobitel rychlosti (Feedrate)
+                // S200     -> Nastavení základní rychlosti (Cruise Delay)
+                
+                if (serialBuffer[0] == 'X') {
+                    long targetX = 0, targetY = 0;
+                    if (sscanf(serialBuffer, "X%ldY%ld", &targetX, &targetY) == 2) {
+                        stepPlotter(targetX, targetY);
+                    }
+                } 
+                else if (serialBuffer[0] == 'P') {
+                    int state = atoi(&serialBuffer[1]);
+                    digitalWrite(PEN_PIN, state ? HIGH : LOW);
+                } 
+                else if (serialBuffer[0] == 'F') {
+                    feedMult = atof(&serialBuffer[1]);
                 }
+                else if (serialBuffer[0] == 'S') {
+                    cruiseDelay = atoi(&serialBuffer[1]);
+                }
+                
+                Serial.print("ok\n"); 
                 bufIndex = 0;
             }
         } 
