@@ -21,8 +21,8 @@ const (
 	StepsPerMm   = 200.0
 	MotorAX      = -370.0
 	MotorBX      = 370.0
-	MotorAY      = 450.0
-	MotorBY      = 450.0
+	MotorAY      = 440.0
+	MotorBY      = 440.0
 	gondolaWidth = 55.0
 	A4Width      = 210.0
 	A4Height     = 297.0
@@ -89,7 +89,7 @@ func moveLine(s *serial.Port, targetX, targetY float64) {
 	for i := 1; i <= int(segments); i++ {
 		select {
 		case <-sigChan:
-			fmt.Println("\n🛑 Detekováno Ctrl+C! Přerušuji...")
+			fmt.Println("\nDetekováno Ctrl+C! Přerušuji...")
 			globalInterrupted = true
 			return
 		default:
