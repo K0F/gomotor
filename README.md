@@ -1,0 +1,3 @@
+# GoMotor 
+
+This had been very WIP (messy) project for some years, more documentation to come...
