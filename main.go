@@ -1,5 +1,6 @@
 package main
 
+
 import (
 	"encoding/xml"
 	"flag"
@@ -17,16 +18,18 @@ import (
 	"github.com/tarm/serial"
 )
 
+// A5 148 x 210
+
 const (
-	StepsPerMm   = 200.0
+	StepsPerMm   = 150.0
 	MotorAX      = -370.0
 	MotorBX      = 370.0
-	MotorAY      = 440.0
-	MotorBY      = 440.0
-	gondolaWidth = 55.0
-	A4Width      = 210.0
-	A4Height     = 297.0
-	SafetyMargin = 10.0
+	MotorAY      = 500.0
+	MotorBY      = 500.0
+	gondolaWidth = 0.0
+	A4Width      = 148.0
+	A4Height     = 210.0
+	SafetyMargin = 5.0
 )
 
 var centerLenA float64
