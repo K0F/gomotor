@@ -85,9 +85,10 @@ var alphabet = map[rune][][]Point{
 func main() {
 	textFlag := flag.String("text", "", "Text k vykresleni")
 	out := flag.String("out", "vystup.svg", "Vystupni soubor")
-	xFlag := flag.Float64("x", 0.0, "Pocatecni X")
-	yFlag := flag.Float64("y", 0.0, "Pocatecni Y")
+	xFlag := flag.Float64("x", 20.0, "Pocatecni X")
+	yFlag := flag.Float64("y", 50.0, "Pocatecni Y")
 	scaleFlag := flag.Float64("scale", 1.0, "Meritko pisma")
+	maxWidthFlag := flag.Float64("maxwidth", 750.0, "Maximalni sirka radku pro zalamovani")
 	flag.Parse()
 
 	text := *textFlag
@@ -112,41 +113,45 @@ func main() {
 	charWidth := 40.0 * scale
 	charSpacing := 10.0 * scale
 	lineSpacing := 70.0 * scale
+	maxWidth := *maxWidthFlag
 
 	var pathBuilder strings.Builder
+	lines := strings.Split(text, "\n")
 
-	for _, char := range strings.ToUpper(text) {
-		if char == '\n' {
-			cursorX = startX
-			cursorY += lineSpacing
-			continue
-		}
-		if char == ' ' {
-			cursorX += charWidth + charSpacing
-			continue
-		}
+	for _, line := range lines {
+		words := strings.Fields(line)
+		for _, word := range words {
+			wordWidth := float64(len([]rune(word))) * (charWidth + charSpacing)
 
-		strokes, exists := alphabet[char]
-		if !exists {
-			cursorX += charWidth + charSpacing
-			continue
-		}
-
-		for _, stroke := range strokes {
-			for i, pt := range stroke {
-				x := cursorX + (pt.X * scale)
-				y := cursorY + (pt.Y * scale)
-				if i == 0 {
-					pathBuilder.WriteString(fmt.Sprintf("M %.2f,%.2f ", x, y))
-				} else {
-					pathBuilder.WriteString(fmt.Sprintf("L %.2f,%.2f ", x, y))
-				}
+			if cursorX > startX && (cursorX+wordWidth) > maxWidth {
+				cursorX = startX
+				cursorY += lineSpacing
 			}
+
+			for _, char := range strings.ToUpper(word) {
+				strokes, exists := alphabet[char]
+				if exists {
+					for _, stroke := range strokes {
+						for i, pt := range stroke {
+							x := cursorX + (pt.X * scale)
+							y := cursorY + (pt.Y * scale)
+							if i == 0 {
+								pathBuilder.WriteString(fmt.Sprintf("M %.2f,%.2f ", x, y))
+							} else {
+								pathBuilder.WriteString(fmt.Sprintf("L %.2f,%.2f ", x, y))
+							}
+						}
+					}
+				}
+				cursorX += charWidth + charSpacing
+			}
+			cursorX += charWidth + charSpacing
 		}
-		cursorX += charWidth + charSpacing
+		cursorX = startX
+		cursorY += lineSpacing
 	}
 
-	svg := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg"><path d="%s" stroke="black" stroke-width="1" fill="none" /></svg>`, pathBuilder.String())
+	svg := fmt.Sprintf(`<svg viewBox="0 0 850 1000" xmlns="http://www.w3.org/2000/svg"><path d="%s" stroke="black" stroke-width="2" fill="none" /></svg>`, pathBuilder.String())
 	os.WriteFile(*out, []byte(svg), 0644)
 	fmt.Println("Vykresleno do:", *out)
 }

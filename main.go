@@ -280,7 +280,7 @@ func main() {
 			}
 
 			plotterX := (pt.X-svgCenterX)*scale + *offsetX
-			plotterY := -(((pt.Y - svgCenterY) * scale) + *offsetY)
+			plotterY := (((pt.Y - svgCenterY) * scale) + *offsetY)
 
 			if plotterX > physLimitX {
 				plotterX = physLimitX
