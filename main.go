@@ -21,9 +21,9 @@ const (
 	StepsPerMm   = 150.0
 	MotorAX      = -370.0
 	MotorBX      = 370.0
-	MotorAY      = 500.0
-	MotorBY      = 500.0
-	gondolaWidth = 0.0
+	MotorAY      = 440.0
+	MotorBY      = 440.0
+	gondolaWidth = 60.0
 	A4Width      = 148.0
 	A4Height     = 210.0
 	SafetyMargin = 5.0
