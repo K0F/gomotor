@@ -1,6 +1,5 @@
 package main
 
-
 import (
 	"encoding/xml"
 	"flag"
@@ -17,8 +16,6 @@ import (
 
 	"github.com/tarm/serial"
 )
-
-// A5 148 x 210
 
 const (
 	StepsPerMm   = 150.0
@@ -75,11 +72,11 @@ func sendCommand(s *serial.Port, cmd string) {
 
 func moveLine(s *serial.Port, targetX, targetY float64) {
 	distance := calculateDistance(currentX, currentY, targetX, targetY)
-	if distance < 0.1 {
+	if distance < 0.05 {
 		return
 	}
 
-	const segmentSize = 2.0
+	const segmentSize = 0.5
 	segments := math.Ceil(distance / segmentSize)
 	if segments < 1 {
 		segments = 1
@@ -187,7 +184,7 @@ func main() {
 
 	var pathStrings []string
 	decoder := xml.NewDecoder(file)
-	numNumbers := regexp.MustCompile(`(-?\d*\.?\d+)`) // Definice
+	numNumbers := regexp.MustCompile(`(-?\d*\.?\d+)`)
 
 	for {
 		token, err := decoder.Token()
@@ -207,11 +204,10 @@ func main() {
 					}
 				}
 			}
-			// ZDE SE POUŽÍVÁ numNumbers
 			if se.Name.Local == "polyline" || se.Name.Local == "polygon" {
 				for _, attr := range se.Attr {
 					if attr.Name.Local == "points" {
-						pts := numNumbers.FindAllString(attr.Value, -1) // <--- POUŽITÍ
+						pts := numNumbers.FindAllString(attr.Value, -1)
 						if len(pts) >= 2 {
 							dFake := "M " + pts[0] + " " + pts[1]
 							for i := 2; i < len(pts)-1; i += 2 {
@@ -284,7 +280,7 @@ func main() {
 			}
 
 			plotterX := (pt.X-svgCenterX)*scale + *offsetX
-			plotterY := ((pt.Y - svgCenterY) * scale) + *offsetY
+			plotterY := -(((pt.Y - svgCenterY) * scale) + *offsetY)
 
 			if plotterX > physLimitX {
 				plotterX = physLimitX
