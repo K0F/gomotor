@@ -1,304 +1,157 @@
 package main
 
 import (
-	"encoding/xml"
 	"flag"
 	"fmt"
 	"io"
-	"log"
-	"math"
 	"os"
-	"os/signal"
-	"regexp"
-	"strconv"
 	"strings"
-	"time"
-
-	"github.com/tarm/serial"
 )
 
-const (
-	StepsPerMm   = 150.0
-	MotorAX      = -370.0
-	MotorBX      = 370.0
-	MotorAY      = 500.0
-	MotorBY      = 500.0
-	gondolaWidth = 0.0
-	A4Width      = 148.0
-	A4Height     = 210.0
-	SafetyMargin = 5.0
-)
+type Point struct{ X, Y float64 }
 
-var centerLenA float64
-var centerLenB float64
-var currentX float64 = 0.0
-var currentY float64 = 0.0
-
-var sigChan = make(chan os.Signal, 1)
-var globalInterrupted bool
-
-type Point struct {
-	X, Y, Mode float64
-}
-
-type Shape []Point
-
-func calculateDistance(x1, y1, x2, y2 float64) float64 {
-	return math.Sqrt((x2-x1)*(x2-x1) + (y2-y1)*(y2-y1))
-}
-
-func waitForOK(s *serial.Port) {
-	buf := make([]byte, 128)
-	for {
-		n, err := s.Read(buf)
-		if err != nil {
-			log.Fatal("Chyba při čtení ze sériového portu:", err)
-		}
-		if n > 0 {
-			if strings.Contains(string(buf[:n]), "ok\n") {
-				return
-			}
-		}
-	}
-}
-
-func sendCommand(s *serial.Port, cmd string) {
-	_, err := s.Write([]byte(cmd + "\n"))
-	if err != nil {
-		log.Fatal("Chyba při odesílání příkazu:", err)
-	}
-	waitForOK(s)
-}
-
-func moveLine(s *serial.Port, targetX, targetY float64) {
-	distance := calculateDistance(currentX, currentY, targetX, targetY)
-	if distance < 0.05 {
-		return
-	}
-
-	const segmentSize = 0.5
-	segments := math.Ceil(distance / segmentSize)
-	if segments < 1 {
-		segments = 1
-	}
-
-	halfGondola := gondolaWidth / 2.0
-	startX := currentX
-	startY := currentY
-
-	for i := 1; i <= int(segments); i++ {
-		select {
-		case <-sigChan:
-			fmt.Println("\nDetekováno Ctrl+C! Přerušuji...")
-			globalInterrupted = true
-			return
-		default:
-		}
-
-		t := float64(i) / segments
-		interX := startX + (targetX-startX)*t
-		interY := startY + (targetY-startY)*t
-
-		currentLenA := calculateDistance(interX-halfGondola, interY, MotorAX, MotorAY)
-		currentLenB := calculateDistance(interX+halfGondola, interY, MotorBX, MotorBY)
-
-		stepsA := (currentLenA - centerLenA) * StepsPerMm
-		stepsB := (currentLenB - centerLenB) * StepsPerMm
-
-		cmd := fmt.Sprintf("X%dY%d\n", int(math.Round(stepsA)), int(math.Round(stepsB)))
-		_, err := s.Write([]byte(cmd))
-		if err != nil {
-			log.Fatal("Chyba zápisu na port:", err)
-		}
-
-		waitForOK(s)
-
-		currentX = interX
-		currentY = interY
-	}
-}
-
-func parseSVGPath(dAttr string) []Point {
-	var points []Point
-	re := regexp.MustCompile(`([MLmlZz])|(-?\d*\.?\d+)`)
-	matches := re.FindAllString(dAttr, -1)
-
-	var currentCmd string
-	var coords []float64
-
-	for _, match := range matches {
-		if match == "M" || match == "L" || match == "m" || match == "l" {
-			currentCmd = match
-			coords = []float64{}
-			continue
-		}
-
-		if currentCmd == "M" || currentCmd == "L" || currentCmd == "m" || currentCmd == "l" {
-			val, err := strconv.ParseFloat(match, 64)
-			if err == nil {
-				coords = append(coords, val)
-				if len(coords) == 2 {
-					mode := 1.0
-					if currentCmd == "M" || currentCmd == "m" {
-						mode = 0.0
-					}
-					points = append(points, Point{X: coords[0], Y: coords[1], Mode: mode})
-					coords = []float64{}
-					if currentCmd == "M" {
-						currentCmd = "L"
-					}
-					if currentCmd == "m" {
-						currentCmd = "l"
-					}
-				}
-			}
-		}
-	}
-	return points
+var alphabet = map[rune][][]Point{
+	'A': {{{0, 50}, {20, 0}, {40, 50}}, {{10, 25}, {30, 25}}},
+	'B': {{{0, 50}, {0, 0}, {30, 0}, {40, 12}, {30, 25}, {0, 25}}, {{30, 25}, {40, 37}, {30, 50}, {0, 50}}},
+	'C': {{{40, 0}, {0, 0}, {0, 50}, {40, 50}}},
+	'D': {{{0, 50}, {0, 0}, {30, 0}, {40, 25}, {30, 50}, {0, 50}}},
+	'E': {{{40, 0}, {0, 0}, {0, 50}, {40, 50}}, {{0, 25}, {30, 25}}},
+	'F': {{{0, 50}, {0, 0}, {40, 0}}, {{0, 25}, {30, 25}}},
+	'G': {{{40, 0}, {0, 0}, {0, 50}, {40, 50}, {40, 25}, {20, 25}}},
+	'H': {{{0, 0}, {0, 50}}, {{40, 0}, {40, 50}}, {{0, 25}, {40, 25}}},
+	'I': {{{20, 0}, {20, 50}}, {{0, 0}, {40, 0}}, {{0, 50}, {40, 50}}},
+	'J': {{{40, 0}, {40, 50}, {0, 50}, {0, 25}}},
+	'K': {{{0, 0}, {0, 50}}, {{40, 0}, {0, 25}, {40, 50}}},
+	'L': {{{0, 0}, {0, 50}, {40, 50}}},
+	'M': {{{0, 50}, {0, 0}, {20, 25}, {40, 0}, {40, 50}}},
+	'N': {{{0, 50}, {0, 0}, {40, 50}, {40, 0}}},
+	'O': {{{0, 0}, {40, 0}, {40, 50}, {0, 50}, {0, 0}}},
+	'P': {{{0, 50}, {0, 0}, {40, 0}, {40, 25}, {0, 25}}},
+	'Q': {{{0, 0}, {40, 0}, {40, 50}, {0, 50}, {0, 0}}, {{20, 30}, {40, 50}}},
+	'R': {{{0, 50}, {0, 0}, {40, 0}, {40, 25}, {0, 25}}, {{20, 25}, {40, 50}}},
+	'S': {{{40, 0}, {0, 0}, {0, 25}, {40, 25}, {40, 50}, {0, 50}}},
+	'T': {{{0, 0}, {40, 0}}, {{20, 0}, {20, 50}}},
+	'U': {{{0, 0}, {0, 50}, {40, 50}, {40, 0}}},
+	'V': {{{0, 0}, {20, 50}, {40, 0}}},
+	'W': {{{0, 0}, {10, 50}, {20, 25}, {30, 50}, {40, 0}}},
+	'X': {{{0, 0}, {40, 50}}, {{40, 0}, {0, 50}}},
+	'Y': {{{0, 0}, {20, 25}, {40, 0}}, {{20, 25}, {20, 50}}},
+	'Z': {{{0, 0}, {40, 0}, {0, 50}, {40, 50}}},
+	'Á': {{{0, 50}, {20, 0}, {40, 50}}, {{10, 25}, {30, 25}}, {{15, -15}, {25, -5}}},
+	'Č': {{{40, 0}, {0, 0}, {0, 50}, {40, 50}}, {{10, -15}, {20, -5}, {30, -15}}},
+	'Ď': {{{0, 50}, {0, 0}, {30, 0}, {40, 25}, {30, 50}, {0, 50}}, {{10, -15}, {20, -5}, {30, -15}}},
+	'É': {{{40, 0}, {0, 0}, {0, 50}, {40, 50}}, {{0, 25}, {30, 25}}, {{15, -15}, {25, -5}}},
+	'Ě': {{{40, 0}, {0, 0}, {0, 50}, {40, 50}}, {{0, 25}, {30, 25}}, {{10, -15}, {20, -5}, {30, -15}}},
+	'Í': {{{20, 0}, {20, 50}}, {{15, -15}, {25, -5}}},
+	'Ň': {{{0, 50}, {0, 0}, {40, 50}, {40, 0}}, {{10, -15}, {20, -5}, {30, -15}}},
+	'Ó': {{{0, 0}, {40, 0}, {40, 50}, {0, 50}, {0, 0}}, {{15, -15}, {25, -5}}},
+	'Ř': {{{0, 50}, {0, 0}, {40, 0}, {40, 25}, {0, 25}}, {{20, 25}, {40, 50}}, {{10, -15}, {20, -5}, {30, -15}}},
+	'Š': {{{40, 0}, {0, 0}, {0, 25}, {40, 25}, {40, 50}, {0, 50}}, {{10, -15}, {20, -5}, {30, -15}}},
+	'Ť': {{{0, 0}, {40, 0}}, {{20, 0}, {20, 50}}, {{10, -15}, {20, -5}, {30, -15}}},
+	'Ú': {{{0, 0}, {0, 50}, {40, 50}, {40, 0}}, {{15, -15}, {25, -5}}},
+	'Ů': {{{0, 0}, {0, 50}, {40, 50}, {40, 0}}, {{15, -10}, {25, -10}, {25, -20}, {15, -20}, {15, -10}}},
+	'Ý': {{{0, 0}, {20, 25}, {40, 0}}, {{20, 25}, {20, 50}}, {{15, -15}, {25, -5}}},
+	'Ž': {{{0, 0}, {40, 0}, {0, 50}, {40, 50}}, {{10, -15}, {20, -5}, {30, -15}}},
+	'0': {{{0, 0}, {40, 0}, {40, 50}, {0, 50}, {0, 0}}},
+	'1': {{{10, 15}, {20, 0}, {20, 50}}, {{0, 50}, {40, 50}}},
+	'2': {{{0, 0}, {40, 0}, {40, 25}, {0, 25}, {0, 50}, {40, 50}}},
+	'3': {{{0, 0}, {40, 0}, {40, 25}, {0, 25}}, {{40, 25}, {40, 50}, {0, 50}}},
+	'4': {{{0, 0}, {0, 25}, {40, 25}}, {{30, 0}, {30, 50}}},
+	'5': {{{40, 0}, {0, 0}, {0, 25}, {40, 25}, {40, 50}, {0, 50}}},
+	'6': {{{40, 0}, {0, 0}, {0, 50}, {40, 50}, {40, 25}, {0, 25}}},
+	'7': {{{0, 0}, {40, 0}, {20, 50}}},
+	'8': {{{20, 25}, {0, 25}, {0, 0}, {40, 0}, {40, 25}, {20, 25}, {0, 25}, {0, 50}, {40, 50}, {40, 25}}},
+	'9': {{{40, 25}, {0, 25}, {0, 0}, {40, 0}, {40, 50}, {0, 50}}},
+	'(': {{{30, 0}, {10, 25}, {30, 50}}},
+	')': {{{10, 0}, {30, 25}, {10, 50}}},
+	'[': {{{30, 0}, {10, 0}, {10, 50}, {30, 50}}},
+	']': {{{10, 0}, {30, 0}, {30, 50}, {10, 50}}},
+	'{': {{{30, 0}, {15, 15}, {15, 35}, {30, 50}}},
+	'}': {{{15, 0}, {30, 15}, {30, 35}, {15, 50}}},
+	'-': {{{0, 25}, {40, 25}}},
+	'+': {{{20, 0}, {20, 50}}, {{0, 25}, {40, 25}}},
+	'.': {{{20, 45}, {22, 45}}},
+	',': {{{20, 40}, {15, 55}}},
+	'!': {{{20, 0}, {20, 30}}, {{20, 45}, {22, 45}}},
+	'?': {{{0, 15}, {0, 0}, {40, 0}, {40, 20}, {20, 30}}, {{20, 45}, {22, 45}}},
+	':': {{{20, 15}, {22, 15}}, {{20, 45}, {22, 45}}},
+	'/': {{{40, 0}, {0, 50}}},
+	'=': {{{0, 15}, {40, 15}}, {{0, 35}, {40, 35}}},
+	'_': {{{0, 50}, {40, 50}}},
+	'<': {{{40, 0}, {0, 25}, {40, 50}}},
+	'>': {{{0, 0}, {40, 25}, {0, 50}}},
 }
 
 func main() {
-	svgFile := flag.String("file", "", "Cesta k SVG souboru")
-	autoCenter := flag.Bool("center", true, "Automaticky vycentrovat")
-	offsetX := flag.Float64("offx", 0.0, "Dodatečný posun X")
-	offsetY := flag.Float64("offy", 0.0, "Dodatečný posun Y")
-	scaleY := flag.Float64("scaley", 11.0/9.0, "Korekční faktor pro Y osu")
-	speed := flag.Int("speed", 300, "Základní rychlost")
-	feed := flag.Float64("feed", 1.0, "Násobitel rychlosti")
+	textFlag := flag.String("text", "", "Text")
+	out := flag.String("out", "vystup.svg", "Output")
+	xFlag := flag.Float64("x", 20.0, "Start X")
+	yFlag := flag.Float64("y", 50.0, "Start Y")
+	scaleFlag := flag.Float64("scale", 1.0, "Scale")
+	maxWidthFlag := flag.Float64("maxwidth", 750.0, "Max width")
 	flag.Parse()
 
-	if *svgFile == "" {
-		log.Fatal("Musíš zadat soubor: --file=vystup.svg")
-	}
-
-	signal.Notify(sigChan, os.Interrupt)
-
-	halfGondola := gondolaWidth / 2.0
-	centerLenA = calculateDistance(0.0-halfGondola, 0.0, MotorAX, MotorAY)
-	centerLenB = calculateDistance(0.0+halfGondola, 0.0, MotorBX, MotorBY)
-
-	file, err := os.Open(*svgFile)
-	if err != nil {
-		log.Fatal("Nelze otevřít soubor:", err)
-	}
-	defer file.Close()
-
-	var pathStrings []string
-	decoder := xml.NewDecoder(file)
-	numNumbers := regexp.MustCompile(`(-?\d*\.?\d+)`)
-
-	for {
-		token, err := decoder.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			log.Fatal("Chyba XML:", err)
-		}
-
-		switch se := token.(type) {
-		case xml.StartElement:
-			if se.Name.Local == "path" {
-				for _, attr := range se.Attr {
-					if attr.Name.Local == "d" {
-						pathStrings = append(pathStrings, attr.Value)
-					}
-				}
+	text := *textFlag
+	if text == "" {
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) == 0 {
+			bytes, err := io.ReadAll(os.Stdin)
+			if err == nil {
+				text = string(bytes)
 			}
-			if se.Name.Local == "polyline" || se.Name.Local == "polygon" {
-				for _, attr := range se.Attr {
-					if attr.Name.Local == "points" {
-						pts := numNumbers.FindAllString(attr.Value, -1)
-						if len(pts) >= 2 {
-							dFake := "M " + pts[0] + " " + pts[1]
-							for i := 2; i < len(pts)-1; i += 2 {
-								dFake += " L " + pts[i] + " " + pts[i+1]
+		}
+	}
+
+	text = strings.TrimSpace(text)
+	if text == "" {
+		os.Exit(0)
+	}
+
+	scale := *scaleFlag
+	startX, startY := *xFlag, *yFlag
+	cursorX, cursorY := startX, startY
+	charWidth := 40.0 * scale
+	charSpacing := 10.0 * scale
+	lineSpacing := 70.0 * scale
+	maxWidth := *maxWidthFlag
+
+	var pathBuilder strings.Builder
+	lines := strings.Split(text, "\n")
+
+	for _, line := range lines {
+		words := strings.Fields(line)
+		for _, word := range words {
+			wordWidth := float64(len([]rune(word))) * (charWidth + charSpacing)
+
+			if cursorX > startX && (cursorX+wordWidth) > maxWidth {
+				cursorX = startX
+				cursorY += lineSpacing
+			}
+
+			for _, char := range strings.ToUpper(word) {
+				strokes, exists := alphabet[char]
+				if exists {
+					for _, stroke := range strokes {
+						for i, pt := range stroke {
+							x := cursorX + (pt.X * scale)
+							y := cursorY + (pt.Y * scale)
+							if i == 0 {
+								pathBuilder.WriteString(fmt.Sprintf("M %.2f,%.2f ", x, y))
+							} else {
+								pathBuilder.WriteString(fmt.Sprintf("L %.2f,%.2f ", x, y))
 							}
-							pathStrings = append(pathStrings, dFake)
 						}
 					}
 				}
+				cursorX += charWidth + charSpacing
 			}
+			cursorX += charWidth + charSpacing
 		}
+		cursorX = startX
+		cursorY += lineSpacing
 	}
 
-	var shapes []Shape
-	minX, maxX := math.MaxFloat64, -math.MaxFloat64
-	minY, maxY := math.MaxFloat64, -math.MaxFloat64
-
-	for _, pathD := range pathStrings {
-		pts := parseSVGPath(pathD)
-		if len(pts) == 0 {
-			continue
-		}
-		shapes = append(shapes, pts)
-		for _, pt := range pts {
-			if pt.X < minX {
-				minX = pt.X
-			}
-			if pt.X > maxX {
-				maxX = pt.X
-			}
-			if pt.Y < minY {
-				minY = pt.Y
-			}
-			if pt.Y > maxY {
-				maxY = pt.Y
-			}
-		}
-	}
-
-	svgWidth, svgHeight := maxX-minX, maxY-minY
-	targetAreaX, targetAreaY := A4Width-(2*SafetyMargin), A4Height-(2*SafetyMargin)
-	physLimitX, physLimitY := A4Width/2.0, A4Height/2.0
-	scale := math.Min(targetAreaX/svgWidth, targetAreaY/svgHeight)
-
-	var svgCenterX, svgCenterY float64
-	if *autoCenter {
-		svgCenterX, svgCenterY = minX+(svgWidth/2.0), minY+(svgHeight/2.0)
-	}
-
-	c := &serial.Config{Name: "/dev/ttyUSB0", Baud: 115200}
-	s, err := serial.OpenPort(c)
-	if err != nil {
-		log.Fatal("Port nelze otevřít:", err)
-	}
-	defer s.Close()
-
-	fmt.Println("START: Inicializuji rychlost...")
-	time.Sleep(2 * time.Second)
-
-	sendCommand(s, fmt.Sprintf("S%d", *speed))
-	sendCommand(s, fmt.Sprintf("F%.2f", *feed))
-
-	for _, shape := range shapes {
-		if globalInterrupted {
-			break
-		}
-		for _, pt := range shape {
-			if globalInterrupted {
-				break
-			}
-
-			plotterX := (pt.X-svgCenterX)*scale + *offsetX
-			plotterY := (((pt.Y - svgCenterY) * scale * *scaleY) + *offsetY)
-
-			if plotterX > physLimitX {
-				plotterX = physLimitX
-			}
-			if plotterX < -physLimitX {
-				plotterX = -physLimitX
-			}
-			if plotterY > physLimitY {
-				plotterY = physLimitY
-			}
-			if plotterY < -physLimitY {
-				plotterY = -physLimitY
-			}
-
-			moveLine(s, plotterX, plotterY)
-		}
-	}
-	moveLine(s, 0.0, 0.0)
-	fmt.Println("Hotovo.")
+	svg := fmt.Sprintf(`<svg viewBox="0 0 850 1000" xmlns="http://www.w3.org/2000/svg"><path d="%s" stroke="black" stroke-width="2" fill="none" /></svg>`, pathBuilder.String())
+	os.WriteFile(*out, []byte(svg), 0644)
+	fmt.Println("Vykresleno do:", *out)
 }
