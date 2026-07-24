@@ -18,14 +18,14 @@ import (
 )
 
 const (
-	StepsPerMm   = 150.0
+	StepsPerMm   = 204.55 // 1:1
 	MotorAX      = -370.0
 	MotorBX      = 370.0
 	MotorAY      = 440.0
 	MotorBY      = 440.0
 	gondolaWidth = 60.0
-	A4Width      = 148.0
-	A4Height     = 210.0
+	A4Width      = 210.0
+	A4Height     = 297.0
 	SafetyMargin = 5.0
 )
 
@@ -159,9 +159,11 @@ func parseSVGPath(dAttr string) []Point {
 
 func main() {
 	svgFile := flag.String("file", "", "Cesta k SVG souboru")
-	autoCenter := flag.Bool("center", true, "Automaticky vycentrovat")
-	offsetX := flag.Float64("offx", 0.0, "Dodatečný posun X")
-	offsetY := flag.Float64("offy", 0.0, "Dodatečný posun Y")
+	autoCenter := flag.Bool("center", true, "Automaticky vycentrovat do středu papíru")
+	scaleFlag := flag.Float64("scale", 1.0, "Měřítko (1.0 = zachovat 1:1 velikost v mm)")
+	fitToA4 := flag.Bool("fit", false, "Automaticky roztáhnout na maximální velikost A4")
+	offsetX := flag.Float64("offx", 0.0, "Dodatečný posun X (mm)")
+	offsetY := flag.Float64("offy", 0.0, "Dodatečný posun Y (mm)")
 	speed := flag.Int("speed", 300, "Základní rychlost")
 	feed := flag.Float64("feed", 1.0, "Násobitel rychlosti")
 	flag.Parse()
@@ -250,7 +252,11 @@ func main() {
 	svgWidth, svgHeight := maxX-minX, maxY-minY
 	targetAreaX, targetAreaY := A4Width-(2*SafetyMargin), A4Height-(2*SafetyMargin)
 	physLimitX, physLimitY := A4Width/2.0, A4Height/2.0
-	scale := math.Min(targetAreaX/svgWidth, targetAreaY/svgHeight)
+
+	scale := *scaleFlag
+	if *fitToA4 {
+		scale = math.Min(targetAreaX/svgWidth, targetAreaY/svgHeight)
+	}
 
 	var svgCenterX, svgCenterY float64
 	if *autoCenter {
@@ -280,7 +286,7 @@ func main() {
 			}
 
 			plotterX := (pt.X-svgCenterX)*scale + *offsetX
-			plotterY := (((pt.Y - svgCenterY) * scale) + *offsetY)
+			plotterY := (pt.Y-svgCenterY)*scale + *offsetY
 
 			if plotterX > physLimitX {
 				plotterX = physLimitX
