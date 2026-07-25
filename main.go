@@ -18,15 +18,16 @@ import (
 )
 
 const (
-	StepsPerMm   = 204.0
-	MotorAX      = -370.0
-	MotorBX      = 370.0
-	MotorAY      = 520.0
-	MotorBY      = 520.0
-	gondolaWidth = 60.0
-	A4Width      = 200.0
-	A4Height     = 250.0
-	SafetyMargin = 10.0
+	StepsPerMmLeft  = 200.0
+	StepsPerMmRight = 200.0
+	MotorAX         = -370.0
+	MotorBX         = 370.0
+	MotorAY         = 170.0
+	MotorBY         = 170.0
+	gondolaWidth    = 60.0
+	A4Width         = 210.0
+	A4Height        = 297.0
+	SafetyMargin    = 10.0
 )
 
 var (
@@ -41,7 +42,7 @@ var (
 	currentX            float64 = 0.0
 	currentY            float64 = 0.0
 	currentPenState     float64 = -1.0
-	sigChan             = make(chan os.Signal, 1)
+	sigChan                     = make(chan os.Signal, 1)
 	globalInterrupted bool
 )
 
@@ -504,7 +505,7 @@ func waitForOK(s *serial.Port) {
 	for {
 		n, err := s.Read(buf)
 		if err != nil {
-			log.Fatal("Chyba při čtení ze sériového portu:", err)
+			log.Fatal(err)
 		}
 		if n > 0 {
 			line.WriteByte(buf[0])
@@ -521,7 +522,7 @@ func waitForOK(s *serial.Port) {
 func sendCommand(s *serial.Port, cmd string) {
 	_, err := s.Write([]byte(cmd + "\n"))
 	if err != nil {
-		log.Fatal("Chyba při odesílání příkazu:", err)
+		log.Fatal(err)
 	}
 	waitForOK(s)
 }
@@ -557,7 +558,6 @@ func moveLine(s *serial.Port, targetX, targetY float64) {
 	for i := 1; i <= int(segments); i++ {
 		select {
 		case <-sigChan:
-			fmt.Println("\nDetekováno Ctrl+C! Přerušuji...")
 			globalInterrupted = true
 			return
 		default:
@@ -570,8 +570,8 @@ func moveLine(s *serial.Port, targetX, targetY float64) {
 		currentLenA := calculateDistance(interX-halfGondola, interY, MotorAX, MotorAY)
 		currentLenB := calculateDistance(interX+halfGondola, interY, MotorBX, MotorBY)
 
-		stepsA := (currentLenA - centerLenA) * StepsPerMm
-		stepsB := (currentLenB - centerLenB) * StepsPerMm
+		stepsA := (currentLenA - centerLenA) * StepsPerMmLeft
+		stepsB := (currentLenB - centerLenB) * StepsPerMmRight
 
 		cmd := fmt.Sprintf("X%dY%d", int(math.Round(stepsA)), int(math.Round(stepsB)))
 		sendCommand(s, cmd)
@@ -582,21 +582,22 @@ func moveLine(s *serial.Port, targetX, targetY float64) {
 }
 
 func main() {
-	svgFile := flag.String("file", "", "Cesta k SVG souboru")
-	portName := flag.String("port", "/dev/ttyUSB0", "Sériový port")
-	autoCenter := flag.Bool("center", false, "Automaticky vycentrovat do středu papíru")
-	scaleFlag := flag.Float64("scale", 1.0, "Měřítko (1.0 = 1 px jako 1 mm)")
-	fitToA4 := flag.Bool("fit", false, "Automaticky roztáhnout/zmenšit na velikost A4")
-	invertY := flag.Bool("inverty", true, "Otočit/invertovat osu Y")
-	offsetX := flag.Float64("offx", 0.0, "Dodatečný posun X (mm)")
-	offsetY := flag.Float64("offy", 0.0, "Dodatečný posun Y (mm)")
-	speed := flag.Int("speed", 300, "Základní rychlost")
-	feed := flag.Float64("feed", 1.0, "Násobitel rychlosti")
-	perspAngle := flag.Float64("persp", 30.0, "Úhel náklonu desky ve stupních")
+	svgFile := flag.String("file", "", "")
+	portName := flag.String("port", "/dev/ttyUSB0", "")
+	autoCenter := flag.Bool("center", false, "")
+	scaleFlag := flag.Float64("scale", 1.0, "")
+	yscaleFlag := flag.Float64("yscale", 0.75, "Vertical scale correction")
+	fitToA4 := flag.Bool("fit", false, "")
+	invertY := flag.Bool("inverty", true, "")
+	offsetX := flag.Float64("offx", 0.0, "")
+	offsetY := flag.Float64("offy", 0.0, "")
+	speed := flag.Int("speed", 300, "")
+	feed := flag.Float64("feed", 1.0, "")
+	perspAngle := flag.Float64("persp", 0.0, "")
 	flag.Parse()
 
 	if *svgFile == "" {
-		log.Fatal("Musíš zadat soubor: --file=vystup.svg")
+		log.Fatal("file required")
 	}
 
 	signal.Notify(sigChan, os.Interrupt)
@@ -607,7 +608,7 @@ func main() {
 
 	file, err := os.Open(*svgFile)
 	if err != nil {
-		log.Fatal("Nelze otevřít soubor:", err)
+		log.Fatal(err)
 	}
 	defer file.Close()
 
@@ -621,7 +622,7 @@ func main() {
 			break
 		}
 		if err != nil {
-			log.Fatal("Chyba XML:", err)
+			log.Fatal(err)
 		}
 
 		switch se := token.(type) {
@@ -675,7 +676,7 @@ func main() {
 	}
 
 	if len(shapes) == 0 {
-		log.Fatal("V SVG souboru nebyly nalezeny žádné vykreslitelné tvary.")
+		log.Fatal("no shapes")
 	}
 
 	minX, maxX := math.MaxFloat64, -math.MaxFloat64
@@ -708,27 +709,26 @@ func main() {
 
 	targetAreaX, targetAreaY := A4Width-(2*SafetyMargin), A4Height-(2*SafetyMargin)
 
+	perspFactor := 1.0 / math.Cos(*perspAngle*math.Pi/180.0)
+
 	scale := *scaleFlag
 	if *fitToA4 {
-		scale = math.Min(targetAreaX/svgWidth, targetAreaY/svgHeight)
+		scale = math.Min(targetAreaX/svgWidth, targetAreaY/(svgHeight*perspFactor))
 	}
-
-	fmt.Printf("SVG Bounding Box: %.1f x %.1f px/mm\n", svgWidth, svgHeight)
-	fmt.Printf("Použité měřítko (scale): %.4f\n", scale)
 
 	var svgCenterX, svgCenterY float64
 	if *autoCenter {
-		svgCenterX, svgCenterY = minX+(svgWidth/2.0), minY+(svgHeight/2.0)
+		svgCenterX, svgCenterX = minX+(svgWidth/2.0), minY+(svgHeight/2.0)
+		svgCenterY = minY + (svgHeight / 2.0)
 	}
 
 	c := &serial.Config{Name: *portName, Baud: 115200}
-	s, err := serial.OpenPort(c)
+   s, err := serial.OpenPort(c)
 	if err != nil {
-		log.Fatal("Port nelze otevřít:", err)
+		log.Fatal(err)
 	}
 	defer s.Close()
 
-	fmt.Println("START: Inicializuji rychlost...")
 	time.Sleep(2 * time.Second)
 
 	sendCommand(s, fmt.Sprintf("S%d", *speed))
@@ -738,8 +738,6 @@ func main() {
 	if *invertY {
 		yDir = 1.0
 	}
-
-	perspFactor := 1.0 / math.Cos(*perspAngle*math.Pi/180.0)
 
 	for _, shape := range shapes {
 		if globalInterrupted {
@@ -751,7 +749,8 @@ func main() {
 			}
 
 			plotterX := (pt.X - svgCenterX) * scale + *offsetX
-			plotterY := yDir * ((pt.Y - svgCenterY) * scale * perspFactor) + *offsetY
+			// Přidán parametr yscale pro korekci vertikálního protažení po zvednutí motorů
+			plotterY := yDir * ((pt.Y - svgCenterY) * scale * *yscaleFlag * perspFactor) + *offsetY
 
 			setPenState(s, pt.Mode)
 			moveLine(s, plotterX, plotterY)
@@ -761,5 +760,4 @@ func main() {
 	setPenString := 0.0
 	setPenState(s, setPenString)
 	moveLine(s, 0.0, 0.0)
-	fmt.Println("Hotovo.")
 }
