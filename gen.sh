@@ -15,5 +15,5 @@ rm -f vystup.svg
 go run gen.go -text="$TEXT" -y="$Y_POS" -scale="$SCALE" -out=vystup.svg
 
 if [ -f "vystup.svg" ]; then
-    go run ./main.go --file="vystup.svg" --speed=1 --feed=1
+    go run ./main.go --file="vystup.svg" --fit
 fi
