@@ -22,8 +22,8 @@ const (
 	StepsPerMmRight = 200.0
 	MotorAX         = -370.0
 	MotorBX         = 370.0
-	MotorAY         = 170.0
-	MotorBY         = 170.0
+	MotorAY         = 500.0
+	MotorBY         = 500.0
 	gondolaWidth    = 60.0
 	A4Width         = 210.0
 	A4Height        = 297.0
@@ -483,6 +483,72 @@ func convertEllipseToPath(attrs []xml.Attr) string {
 	return convertEllipseToPathFromValues(cx, cy, rx, ry)
 }
 
+func convertRectToSolidHatch(attrs []xml.Attr) string {
+	x := parseAttrFloat(attrs, "x")
+	y := parseAttrFloat(attrs, "y")
+	w := parseAttrFloat(attrs, "width")
+	h := parseAttrFloat(attrs, "height")
+	if w <= 0 || h <= 0 {
+		return ""
+	}
+
+	const hatchStep = 0.22
+
+	var sb strings.Builder
+	currentY := y
+	goingRight := true
+
+	for currentY <= y+h {
+		if goingRight {
+			sb.WriteString(fmt.Sprintf("M %f %f L %f %f ", x, currentY, x+w, currentY))
+		} else {
+			sb.WriteString(fmt.Sprintf("M %f %f L %f %f ", x+w, currentY, x, currentY))
+		}
+		goingRight = !goingRight
+		currentY += hatchStep
+	}
+
+	return sb.String()
+}
+
+func convertRectToHatchedPath(attrs []xml.Attr) string {
+	x := parseAttrFloat(attrs, "x")
+	y := parseAttrFloat(attrs, "y")
+	w := parseAttrFloat(attrs, "width")
+	h := parseAttrFloat(attrs, "height")
+	if w <= 0 || h <= 0 {
+		return ""
+	}
+
+	const hatchStep = 0.3
+
+	var sb strings.Builder
+	currentY := y
+	goingRight := true
+
+	sb.WriteString(fmt.Sprintf("M %f %f", x, currentY))
+
+	for currentY <= y+h {
+		if goingRight {
+			sb.WriteString(fmt.Sprintf(" L %f %f", x+w, currentY))
+		} else {
+			sb.WriteString(fmt.Sprintf(" L %f %f", x, currentY))
+		}
+
+		currentY += hatchStep
+		if currentY <= y+h {
+			if goingRight {
+				sb.WriteString(fmt.Sprintf(" L %f %f", x+w, currentY))
+			} else {
+				sb.WriteString(fmt.Sprintf(" L %f %f", x, currentY))
+			}
+		}
+		goingRight = !goingRight
+	}
+
+	return sb.String()
+}
+
 func convertEllipseToPathFromValues(cx, cy, rx, ry float64) string {
 	k := 0.552284749831
 	ox := rx * k
@@ -533,19 +599,27 @@ func setPenState(s *serial.Port, mode float64) {
 	}
 	if mode == 0.0 {
 		sendCommand(s, "P0")
+		time.Sleep(300 * time.Millisecond) // Prodleva pro dojetí serva (pen up)
 	} else if mode == 1.0 {
 		sendCommand(s, "P1")
+		time.Sleep(300 * time.Millisecond) // Prodleva pro spuštění tužky (pen down)
 	}
 	currentPenState = mode
 }
 
 func moveLine(s *serial.Port, targetX, targetY float64) {
 	distance := calculateDistance(currentX, currentY, targetX, targetY)
-	if distance < 0.05 {
+	if distance < 0.1 {
 		return
 	}
 
-	const segmentSize = 0.5
+	// Increase segment size to reduce command overhead and motor stuttering.
+	// 2.0mm for drawing, 5.0mm for rapid repositioning (pen up).
+	segmentSize := 2.0
+	if currentPenState == 0.0 {
+		segmentSize = 5.0
+	}
+
 	segments := math.Ceil(distance / segmentSize)
 	if segments < 1 {
 		segments = 1
@@ -575,18 +649,21 @@ func moveLine(s *serial.Port, targetX, targetY float64) {
 
 		cmd := fmt.Sprintf("X%dY%d", int(math.Round(stepsA)), int(math.Round(stepsB)))
 		sendCommand(s, cmd)
+		// Removed the 20ms time.Sleep here, as waitForOK already handles 
+		// synchronization with the hardware buffer.
 
 		currentX = interX
 		currentY = interY
 	}
 }
 
+
 func main() {
 	svgFile := flag.String("file", "", "")
 	portName := flag.String("port", "/dev/ttyUSB0", "")
 	autoCenter := flag.Bool("center", false, "")
 	scaleFlag := flag.Float64("scale", 1.0, "")
-	yscaleFlag := flag.Float64("yscale", 0.75, "Vertical scale correction")
+	yscaleFlag := flag.Float64("yscale", 1.0, "Vertical scale correction")
 	fitToA4 := flag.Bool("fit", false, "")
 	invertY := flag.Bool("inverty", true, "")
 	offsetX := flag.Float64("offx", 0.0, "")
@@ -613,7 +690,12 @@ func main() {
 	defer file.Close()
 
 	var shapes []Shape
+
 	decoder := xml.NewDecoder(file)
+	decoder.CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
+		return input, nil
+	}
+
 	stack := TransformStack{}
 
 	for {
@@ -643,7 +725,7 @@ func main() {
 			case "path":
 				dPath = getAttr(se.Attr, "d")
 			case "rect":
-				dPath = convertRectToPath(se.Attr)
+				dPath = convertRectToHatchedPath(se.Attr)
 			case "line":
 				dPath = convertLineToPath(se.Attr)
 			case "circle":
@@ -718,12 +800,12 @@ func main() {
 
 	var svgCenterX, svgCenterY float64
 	if *autoCenter {
-		svgCenterX, svgCenterX = minX+(svgWidth/2.0), minY+(svgHeight/2.0)
+		svgCenterX = minX + (svgWidth / 2.0)
 		svgCenterY = minY + (svgHeight / 2.0)
 	}
 
 	c := &serial.Config{Name: *portName, Baud: 115200}
-   s, err := serial.OpenPort(c)
+	s, err := serial.OpenPort(c)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -733,6 +815,8 @@ func main() {
 
 	sendCommand(s, fmt.Sprintf("S%d", *speed))
 	sendCommand(s, fmt.Sprintf("F%.2f", *feed))
+
+	setPenState(s, 0.0)
 
 	yDir := -1.0
 	if *invertY {
@@ -749,7 +833,6 @@ func main() {
 			}
 
 			plotterX := (pt.X - svgCenterX) * scale + *offsetX
-			// Přidán parametr yscale pro korekci vertikálního protažení po zvednutí motorů
 			plotterY := yDir * ((pt.Y - svgCenterY) * scale * *yscaleFlag * perspFactor) + *offsetY
 
 			setPenState(s, pt.Mode)
