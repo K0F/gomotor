@@ -613,8 +613,6 @@ func moveLine(s *serial.Port, targetX, targetY float64) {
 		return
 	}
 
-	// Increase segment size to reduce command overhead and motor stuttering.
-	// 2.0mm for drawing, 5.0mm for rapid repositioning (pen up).
 	segmentSize := 2.0
 	if currentPenState == 0.0 {
 		segmentSize = 5.0
@@ -649,14 +647,11 @@ func moveLine(s *serial.Port, targetX, targetY float64) {
 
 		cmd := fmt.Sprintf("X%dY%d", int(math.Round(stepsA)), int(math.Round(stepsB)))
 		sendCommand(s, cmd)
-		// Removed the 20ms time.Sleep here, as waitForOK already handles 
-		// synchronization with the hardware buffer.
 
 		currentX = interX
 		currentY = interY
 	}
 }
-
 
 func main() {
 	svgFile := flag.String("file", "", "")
@@ -671,6 +666,7 @@ func main() {
 	speed := flag.Int("speed", 300, "")
 	feed := flag.Float64("feed", 1.0, "")
 	perspAngle := flag.Float64("persp", 0.0, "")
+	minLift := flag.Float64("minlift", 2.0, "Do not lift pen if distance is smaller than this")
 	flag.Parse()
 
 	if *svgFile == "" {
@@ -835,7 +831,15 @@ func main() {
 			plotterX := (pt.X - svgCenterX) * scale + *offsetX
 			plotterY := yDir * ((pt.Y - svgCenterY) * scale * *yscaleFlag * perspFactor) + *offsetY
 
-			setPenState(s, pt.Mode)
+			targetMode := pt.Mode
+			if targetMode == 0.0 && currentPenState == 1.0 && *minLift > 0 {
+				dist := calculateDistance(currentX, currentY, plotterX, plotterY)
+				if dist < *minLift {
+					targetMode = 1.0
+				}
+			}
+
+			setPenState(s, targetMode)
 			moveLine(s, plotterX, plotterY)
 		}
 	}
