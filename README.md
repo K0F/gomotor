@@ -21,6 +21,7 @@ stepsB := (lenB - centerLenB) * 200
 |------|---------|
 | `main.go` | SVG -> plotter host (paths, transforms, curves, scaling, IK, serial) |
 | `gen.go` | Text-to-SVG stroke-font generator |
+| `gen_font.py` | Builds `gomotor.ttf` from the hardcoded `alphabet` in `gen.go` |
 | `50hz.go` | Live Czech grid-frequency recorder |
 | `flatenner.go` | Nearest-neighbor SVG path optimizer |
 | `main.c` | Older C version of the SVG host (M/L only) |
@@ -51,9 +52,14 @@ go build -o gomotor main.go
 # text -> SVG -> plotter
 echo "Hello" | ./gen.sh
 
+# hardcoded stroke font -> TTF
+python3 gen_font.py   # writes gomotor.ttf (pen strokes as filled outlines)
+
 # C host
 gcc -o plotter main.c -lm && ./plotter -f art.svg
 ```
+
+The Gomotor font and `gen_font.py` are Copyright (c) 2026 KOF. All rights reserved.
 
 ## `main.go` flags
 
