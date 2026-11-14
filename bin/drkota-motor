@@ -16,24 +16,21 @@ DEFAULT_PORT = "/dev/ttyUSB0"
 STATE_FILE = "/tmp/drkota_pos.json"
 
 def get_target_host():
-    """Vrátí 'local', pokud ttyUSB0 existuje lokálně, jinak 't520'."""
+    """Vrátí 'local', pokud ttyUSB0 existuje lokálně, jinak 'bazina'."""
     if os.path.exists(DEFAULT_PORT):
         return "local"
-    # Zkontroluj, zda ttyUSB0 existuje na t520
     try:
-        res = subprocess.run(["ssh", "-q", "t520", "test -e " + DEFAULT_PORT], timeout=3)
+        res = subprocess.run(["ssh", "-q", "bazina", "test -e " + DEFAULT_PORT], timeout=3)
         if res.returncode == 0:
-            return "t520"
+            return "bazina"
     except Exception:
         pass
     return "local"
 
 def run_remote_if_needed():
     target = get_target_host()
-    if target == "t520" and os.uname().nodename != "t520":
-        # Spusť tento skript na t520 se stejnými argumenty
-        cmd = ["ssh", "-t", "t520", "python3 - " + " ".join([f'"{a}"' for a in sys.argv[1:]])]
-        # Pošli obsah tohoto skriptu na stdin
+    if target == "bazina" and os.uname().nodename != "bazina":
+        cmd = ["ssh", "-t", "bazina", "python3 - " + " ".join([f'"{a}"' for a in sys.argv[1:]])]
         with open(__file__, "rb") as f:
             code = f.read()
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE)

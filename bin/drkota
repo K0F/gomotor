@@ -8,16 +8,16 @@ import sys, os, time, subprocess, argparse
 PORT = os.environ.get("DRKOTA_PORT", "/dev/ttyUSB0")
 BAUD = int(os.environ.get("DRKOTA_BAUD", 115200))
 GOMOTOR_BIN = os.path.expanduser("~/src/gomotor/gomotor")
-REMOTE_HOST = os.environ.get("DRKOTA_HOST", "t520")
+REMOTE_HOST = os.environ.get("DRKOTA_HOST", "bazina")
 
 
-def forward_to_t520_if_needed():
-    """If /dev/ttyUSB0 is not local and we are not on t520, forward command to t520."""
+def forward_to_target_if_needed():
+    """If /dev/ttyUSB0 exists locally, run locally; otherwise forward via SSH to bazina."""
     if os.path.exists(PORT):
         return
     if os.uname().nodename == REMOTE_HOST:
         return
-    # If plotting a local SVG file on bazina, copy it to t520:/tmp/ first
+    # If plotting a local SVG file from t520/boxC, copy it to bazina:/tmp/ first
     args = list(sys.argv[1:])
     if len(args) >= 2 and args[0] == "plot" and os.path.exists(args[1]):
         local_svg = os.path.abspath(args[1])
@@ -155,7 +155,7 @@ def cmd_stop(args):
 
 
 def main():
-    forward_to_t520_if_needed()
+    forward_to_target_if_needed()
 
     parser = argparse.ArgumentParser(description="Drkota (GoMotor) V-Plotter CLI Controller")
     subparsers = parser.add_subparsers(dest="subcommand", help="Subcommand")
