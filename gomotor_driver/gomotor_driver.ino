@@ -1,13 +1,23 @@
 #include <Servo.h>
 
-Servo penServo;
+// Drive all candidate headers on the CNC Shield V3 simultaneously via Timer1:
+// Pin 9  = X+ / X-
+// Pin 10 = Y+ / Y-
+// Pin 11 = Z+ / Z-
+// Pin 12 = SpnEn
+// Pin 13 = SpnDir
+// Pin 4  = Z_STEP
+// Pin 7  = Z_DIR
+// Pin A3 = CoolEn
+const byte NUM_SERVOS = 8;
+const byte SERVO_PINS[NUM_SERVOS] = { 9, 10, 11, 12, 13, 4, 7, A3 };
+Servo penServos[NUM_SERVOS];
 
 const byte X_STEP_PIN = 2; // PORTD2
 const byte X_DIR_PIN  = 5; // PORTD5
 const byte Y_STEP_PIN = 3; // PORTD3
 const byte Y_DIR_PIN  = 6; // PORTD6
 const byte ENABLE_PIN = 8; // PORTB0
-const byte PEN_PIN    = 11; // Z+ header on CNC shield (Servo)
 
 const bool INVERT_X = false;
 const bool INVERT_Y = false;
@@ -25,6 +35,12 @@ long currentY = 0;
 char serialBuffer[32];
 int bufIndex = 0;
 
+void writeAllServos(int angle) {
+    for (byte i = 0; i < NUM_SERVOS; i++) {
+        penServos[i].write(angle);
+    }
+}
+
 void setup() {
     pinMode(X_STEP_PIN, OUTPUT);
     pinMode(X_DIR_PIN, OUTPUT);
@@ -35,9 +51,11 @@ void setup() {
     // Enable stepper drivers (active LOW)
     digitalWrite(ENABLE_PIN, LOW);
 
-    // Permanently attached servo on Pin 11 (Z+), exactly like working gomotor_driver_w_pen.ino
-    penServo.attach(PEN_PIN);
-    penServo.write(90);
+    // Attach all candidate CNC Shield headers simultaneously and set initial angle (90)
+    for (byte i = 0; i < NUM_SERVOS; i++) {
+        penServos[i].attach(SERVO_PINS[i]);
+    }
+    writeAllServos(90);
 
     Serial.begin(115200);
 }
@@ -107,11 +125,11 @@ void loop() {
                 else if (serialBuffer[0] == 'P') {
                     int val = atoi(&serialBuffer[1]);
                     if (val == 1) {
-                        penServo.write(PEN_UP_ANGLE);   // P1 = 180 (UP)
+                        writeAllServos(PEN_UP_ANGLE);   // P1 = 180 (UP)
                     } else if (val == 0) {
-                        penServo.write(PEN_DOWN_ANGLE); // P0 = 90 (DOWN)
-                    } else if (val >= 10 && val <= 180) {
-                        penServo.write(val);
+                        writeAllServos(PEN_DOWN_ANGLE); // P0 = 90 (DOWN)
+                    } else if (val >= 5 && val <= 180) {
+                        writeAllServos(val);            // Direct angle on all pins
                     }
                 }
                 else if (serialBuffer[0] == 'F') {
