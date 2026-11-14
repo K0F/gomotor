@@ -1,12 +1,33 @@
 #!/usr/bin/env python3
 """
-drkota — Unified CLI control tool for Drkota (GoMotor) V-plotter
+drkota — Unified CLI control tool for Drkota (GoMotor) V-plotter.
+Works both locally on t520 (/dev/ttyUSB0) and transparently from bazina/boxC via SSH to t520.
 """
 import sys, os, time, subprocess, argparse
 
 PORT = os.environ.get("DRKOTA_PORT", "/dev/ttyUSB0")
 BAUD = int(os.environ.get("DRKOTA_BAUD", 115200))
 GOMOTOR_BIN = os.path.expanduser("~/src/gomotor/gomotor")
+REMOTE_HOST = os.environ.get("DRKOTA_HOST", "t520")
+
+
+def forward_to_t520_if_needed():
+    """If /dev/ttyUSB0 is not local and we are not on t520, forward command to t520."""
+    if os.path.exists(PORT):
+        return
+    if os.uname().nodename == REMOTE_HOST:
+        return
+    # If plotting a local SVG file on bazina, copy it to t520:/tmp/ first
+    args = list(sys.argv[1:])
+    if len(args) >= 2 and args[0] == "plot" and os.path.exists(args[1]):
+        local_svg = os.path.abspath(args[1])
+        remote_svg = f"/tmp/drkota_{os.path.basename(local_svg)}"
+        subprocess.run(["scp", "-q", local_svg, f"{REMOTE_HOST}:{remote_svg}"], check=True)
+        args[1] = remote_svg
+    cmd = ["ssh", REMOTE_HOST, "/home/kof/bin/drkota"] + args
+    res = subprocess.run(cmd)
+    sys.exit(res.returncode)
+
 
 def send_command(cmd, timeout=2.0, port=PORT, baud=BAUD):
     import serial
@@ -27,29 +48,25 @@ def send_command(cmd, timeout=2.0, port=PORT, baud=BAUD):
         print(f"Serial Error on {port}: {e}")
         sys.exit(1)
 
+
 def cmd_status(args):
     import serial
     if not os.path.exists(PORT):
         print(f"Status: OFFLINE (Port {PORT} not connected)")
         return
-    print(f"Connecting to {PORT} at {BAUD} baud...")
+    print(f"Connecting to {PORT} at {BAUD} baud on {os.uname().nodename}...")
     try:
         s = serial.Serial(PORT, BAUD, timeout=1.5)
-        # Pulse DTR to see if board announces itself
-        s.dtr = False
-        time.sleep(0.05)
-        s.dtr = True
-        time.sleep(0.5)
-        boot_msg = s.read(s.in_waiting or 0).decode("ascii", errors="replace").strip()
-        if boot_msg:
-            print(f"Boot msg: {boot_msg}")
-        s.write(b"\n")
         time.sleep(0.1)
+        s.reset_input_buffer()
+        s.write(b"V\n")
+        s.flush()
         resp = s.readline().decode("ascii", errors="replace").strip()
         s.close()
-        print(f"Status: ONLINE (Response: {resp or 'no response to empty line'})")
+        print(f"Status: ONLINE (Response: {resp or 'no response'})")
     except Exception as e:
         print(f"Status: ERROR ({e})")
+
 
 def cmd_pen(args):
     action = args.action.lower()
@@ -65,32 +82,58 @@ def cmd_pen(args):
             resp = send_command(f"P{val}")
             print(f"Pen Angle {val}°: {resp}")
         except ValueError:
-            print("Usage: drkota pen [up|down|<angle 10-180>]")
+            print("Usage: drkota pen [up|down|<angle 5-180>]")
+
+
+def cmd_pin(args):
+    pin = int(args.pin)
+    resp = send_command(f"M{pin}")
+    print(f"Switched Servo Pin to D{pin} (M{pin}): {resp}")
+
+
+def cmd_speed(args):
+    delay_us = int(args.delay)
+    resp = send_command(f"S{delay_us}")
+    print(f"Cruise delay set to {delay_us} us (S{delay_us}): {resp}")
+
 
 def cmd_jog(args):
     dx = int(args.dx)
     dy = int(args.dy)
     cmd = f"X{dx}Y{dy}"
     print(f"Jogging {cmd}...")
-    resp = send_command(cmd, timeout=10.0)
+    resp = send_command(cmd, timeout=15.0)
     print(f"Result: {resp}")
+
 
 def cmd_zero(args):
     resp = send_command("Z0")
     print(f"Coordinates Zeroed: {resp}")
+
 
 def cmd_enable(args):
     en = 1 if args.state.lower() in ["on", "1", "true"] else 0
     resp = send_command(f"E{en}")
     print(f"Steppers Enabled={en}: {resp}")
 
+
 def cmd_flash(args):
     mode = args.board or "uno"
     flasher = os.path.expanduser("~/bin/drkota-flash")
     subprocess.run([flasher, mode], check=True)
 
+
+def cmd_text(args):
+    text = " ".join(args.words).strip()
+    if not text:
+        print("Usage: drkota text <message>")
+        sys.exit(1)
+    gomotor_dir = os.path.expanduser("~/src/gomotor")
+    subprocess.run(["./gen.sh", text], cwd=gomotor_dir, check=True)
+
+
 def cmd_plot(args):
-    svg_file = args.file
+    svg_file = os.path.abspath(args.file)
     if not os.path.exists(svg_file):
         print(f"Error: File {svg_file} does not exist.")
         sys.exit(1)
@@ -103,7 +146,17 @@ def cmd_plot(args):
     print(f"Executing: {' '.join(cmd)}")
     subprocess.run(cmd)
 
+
+def cmd_stop(args):
+    subprocess.run(["pkill", "-INT", "-f", "gomotor --file"], check=False)
+    time.sleep(0.2)
+    resp = send_command("P1")
+    print(f"Stopped active plot and lifted pen (P1): {resp}")
+
+
 def main():
+    forward_to_t520_if_needed()
+
     parser = argparse.ArgumentParser(description="Drkota (GoMotor) V-Plotter CLI Controller")
     subparsers = parser.add_subparsers(dest="subcommand", help="Subcommand")
 
@@ -113,11 +166,21 @@ def main():
 
     # pen
     p_pen = subparsers.add_parser("pen", help="Control pen servo [up|down|<angle>]")
-    p_pen.add_argument("action", help="up, down, or angle (10-180)")
+    p_pen.add_argument("action", help="up, down, or angle (5-180)")
     p_pen.set_defaults(func=cmd_pen)
 
+    # pin
+    p_pin = subparsers.add_parser("pin", help="Switch active servo pin at runtime (e.g. 11, 12, 9, 10)")
+    p_pin.add_argument("pin", type=int, help="Arduino digital pin number")
+    p_pin.set_defaults(func=cmd_pin)
+
+    # speed
+    p_speed = subparsers.add_parser("speed", help="Set stepper cruise delay in microseconds (default 450)")
+    p_speed.add_argument("delay", type=int, help="Delay in us (lower = faster, e.g. 300..800)")
+    p_speed.set_defaults(func=cmd_speed)
+
     # jog
-    p_jog = subparsers.add_parser("jog", help="Relative jog steps [dx dy]")
+    p_jog = subparsers.add_parser("jog", help="Move to step coordinates [x y]")
     p_jog.add_argument("dx", type=int, help="Steps for Motor A (X)")
     p_jog.add_argument("dy", type=int, help="Steps for Motor B (Y)")
     p_jog.set_defaults(func=cmd_jog)
@@ -142,6 +205,15 @@ def main():
     p_plot.add_argument("extra", nargs=argparse.REMAINDER, help="Extra flags passed to gomotor")
     p_plot.set_defaults(func=cmd_plot)
 
+    # text
+    p_text = subparsers.add_parser("text", help="Render text to SVG and plot it")
+    p_text.add_argument("words", nargs="+", help="Text string to plot")
+    p_text.set_defaults(func=cmd_text)
+
+    # stop
+    p_stop = subparsers.add_parser("stop", help="Stop active plot and lift pen")
+    p_stop.set_defaults(func=cmd_stop)
+
     if len(sys.argv) < 2:
         parser.print_help()
         sys.exit(0)
@@ -151,6 +223,7 @@ def main():
         args.func(args)
     else:
         parser.print_help()
+
 
 if __name__ == "__main__":
     main()

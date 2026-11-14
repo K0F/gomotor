@@ -7,7 +7,8 @@ const byte X_DIR_PIN  = 5; // PORTD5
 const byte Y_STEP_PIN = 3; // PORTD3
 const byte Y_DIR_PIN  = 6; // PORTD6
 const byte ENABLE_PIN = 8; // PORTB0
-const byte PEN_PIN    = 11; // Z+ header on CNC shield
+const byte PEN_PIN_Z  = 11; // Z+ header on CNC shield (Servo)
+const byte PEN_PIN_9  = 9;  // X+ header on CNC shield (fallback / digital)
 
 const bool INVERT_X = false;
 const bool INVERT_Y = false;
@@ -15,35 +16,25 @@ const bool INVERT_Y = false;
 // Servo angles (1 = lifts pen from surface, 0 = lowers pen to surface)
 const int PEN_UP_ANGLE   = 180; // 1 = pen UP
 const int PEN_DOWN_ANGLE = 90;  // 0 = pen DOWN
-bool holdServo = false;         // Keep PWM active if needed (H1 / H0)
-int currentPenAngle = PEN_UP_ANGLE;
+byte activePenPin        = PEN_PIN_Z;
 
-// Timing and smoothing parameters
-unsigned int cruiseDelay = 300;
-const unsigned int START_DELAY = 900;
-const long RAMP_THRESHOLD = 400; // Apply smooth ramp only on moves > 400 steps (~2.1 mm)
-const long RAMP_STEPS     = 80;
+unsigned int cruiseDelay = 450; // Safe default for A4988/DRV8825 to prevent thermal/current skipping
+float feedMult = 1.0;
 
 long currentX = 0;
 long currentY = 0;
-int lastSignX = 0;
-int lastSignY = 0;
-float feedMult = 1.0;
 
 char serialBuffer[32];
 int bufIndex = 0;
 
-void movePenSmooth(int angle) {
-    currentPenAngle = angle;
+void setPenAngle(int angle) {
     if (!penServo.attached()) {
-        penServo.attach(PEN_PIN);
+        penServo.attach(activePenPin);
     }
     penServo.write(angle);
-    delay(250);
-    // Detach Timer1 ISR while stepping so stepper pulse timing is 100% deterministic (zero jitter)
-    if (!holdServo) {
-        penServo.detach();
-        digitalWrite(PEN_PIN, LOW);
+    // Also toggle Pin 9 in case pen is wired to Pin 9
+    if (activePenPin != PEN_PIN_9) {
+        digitalWrite(PEN_PIN_9, (angle > 120) ? HIGH : LOW);
     }
 }
 
@@ -53,15 +44,17 @@ void setup() {
     pinMode(Y_STEP_PIN, OUTPUT);
     pinMode(Y_DIR_PIN, OUTPUT);
     pinMode(ENABLE_PIN, OUTPUT);
+    pinMode(PEN_PIN_9, OUTPUT);
 
     // Enable stepper drivers (active LOW)
     digitalWrite(ENABLE_PIN, LOW);
 
-    // Initialize servo in UP position and detach Timer1 ISR
-    movePenSmooth(PEN_UP_ANGLE);
+    // Keep Servo continuously attached on Pin 11 (just like gomotor_driver_w_pen.ino)
+    penServo.attach(activePenPin);
+    penServo.write(PEN_UP_ANGLE);
 
     Serial.begin(115200);
-    Serial.println("DRKOTA READY");
+    Serial.println("DRKOTA V2 SERVO READY");
 }
 
 void stepPlotter(long targetX, long targetY) {
@@ -77,59 +70,43 @@ void stepPlotter(long targetX, long targetY) {
 
     digitalWrite(X_DIR_PIN, ((deltaX > 0) ^ INVERT_X) ? HIGH : LOW);
     digitalWrite(Y_DIR_PIN, ((deltaY > 0) ^ INVERT_Y) ? HIGH : LOW);
-    // Direction setup guard time for A4988 / DRV8825
-    delayMicroseconds(5);
+    delayMicroseconds(10); // Setup time for stepper driver DIR input
 
     long maxSteps = max(stepsX, stepsY);
     long overX = maxSteps / 2;
     long overY = maxSteps / 2;
 
-    unsigned int targetDelay = (unsigned int)(cruiseDelay / feedMult);
-    if (targetDelay < 60) targetDelay = 60;
-
-    // Only ramp if this is a long move or a sharp reversal; short collinear segments run at continuous cruise speed
-    bool dirChanged = (stepsX > 20 && signX != lastSignX && lastSignX != 0) ||
-                      (stepsY > 20 && signY != lastSignY && lastSignY != 0);
-    bool useRamp = (maxSteps >= RAMP_THRESHOLD) || dirChanged;
-    long actualRamp = useRamp ? min(RAMP_STEPS, maxSteps / 3) : 0;
-    unsigned int startD = max(targetDelay, START_DELAY);
+    unsigned int currentDelay = (unsigned int)(cruiseDelay / feedMult);
+    if (currentDelay < 80) currentDelay = 80;
 
     for (long i = 0; i < maxSteps; i++) {
-        byte stepMask = 0;
-
         overX += stepsX;
+        overY += stepsY;
+
+        bool doStepX = false;
+        bool doStepY = false;
+
         if (overX >= maxSteps) {
             overX -= maxSteps;
-            stepMask |= (1 << X_STEP_PIN);
+            digitalWrite(X_STEP_PIN, HIGH);
+            doStepX = true;
             currentX += signX;
         }
-
-        overY += stepsY;
         if (overY >= maxSteps) {
             overY -= maxSteps;
-            stepMask |= (1 << Y_STEP_PIN);
+            digitalWrite(Y_STEP_PIN, HIGH);
+            doStepY = true;
             currentY += signY;
         }
 
-        // Simultaneous atomic step pulse on PORTD (pins 2 & 3)
-        PORTD |= stepMask;
-        delayMicroseconds(4);
-        PORTD &= ~stepMask;
+        // 10us pulse width guarantees clean step detection on all A4988/DRV8825 clones
+        delayMicroseconds(10);
 
-        unsigned int d = targetDelay;
-        if (actualRamp > 0) {
-            if (i < actualRamp) {
-                d = startD - (unsigned int)(((long)(startD - targetDelay) * i) / actualRamp);
-            } else if (i >= maxSteps - actualRamp) {
-                long rem = maxSteps - 1 - i;
-                d = startD - (unsigned int)(((long)(startD - targetDelay) * rem) / actualRamp);
-            }
-        }
-        delayMicroseconds(d);
+        if (doStepX) digitalWrite(X_STEP_PIN, LOW);
+        if (doStepY) digitalWrite(Y_STEP_PIN, LOW);
+
+        delayMicroseconds(currentDelay);
     }
-
-    if (stepsX > 0) lastSignX = signX;
-    if (stepsY > 0) lastSignY = signY;
 }
 
 void loop() {
@@ -147,21 +124,21 @@ void loop() {
                 else if (serialBuffer[0] == 'P') {
                     int val = atoi(&serialBuffer[1]);
                     if (val == 1) {
-                        movePenSmooth(PEN_UP_ANGLE);
+                        setPenAngle(PEN_UP_ANGLE);   // P1 = 180 deg (UP)
                     } else if (val == 0) {
-                        movePenSmooth(PEN_DOWN_ANGLE);
-                    } else if (val >= 10 && val <= 180) {
-                        movePenSmooth(val);
+                        setPenAngle(PEN_DOWN_ANGLE); // P0 = 90 deg (DOWN)
+                    } else if (val >= 5 && val <= 180) {
+                        setPenAngle(val);            // Direct servo angle (e.g. P120)
                     }
                 }
-                else if (serialBuffer[0] == 'H') {
-                    holdServo = (atoi(&serialBuffer[1]) != 0);
-                    if (holdServo) {
-                        penServo.attach(PEN_PIN);
-                        penServo.write(currentPenAngle);
-                    } else {
+                else if (serialBuffer[0] == 'M') {
+                    // Switch servo pin at runtime (e.g. M11, M9, M10, M12) to test CNC shield headers
+                    int pin = atoi(&serialBuffer[1]);
+                    if (pin >= 4 && pin <= 13 && pin != 8) {
                         penServo.detach();
-                        digitalWrite(PEN_PIN, LOW);
+                        activePenPin = (byte)pin;
+                        penServo.attach(activePenPin);
+                        penServo.write(PEN_UP_ANGLE);
                     }
                 }
                 else if (serialBuffer[0] == 'F') {
@@ -170,7 +147,7 @@ void loop() {
                 }
                 else if (serialBuffer[0] == 'S') {
                     cruiseDelay = atoi(&serialBuffer[1]);
-                    if (cruiseDelay < 60) cruiseDelay = 60;
+                    if (cruiseDelay < 80) cruiseDelay = 80;
                 }
                 else if (serialBuffer[0] == 'E') {
                     int en = atoi(&serialBuffer[1]);
@@ -179,8 +156,13 @@ void loop() {
                 else if (serialBuffer[0] == 'Z') {
                     currentX = 0;
                     currentY = 0;
-                    lastSignX = 0;
-                    lastSignY = 0;
+                }
+                else if (serialBuffer[0] == 'V') {
+                    Serial.print("DRKOTA_V2_PIN");
+                    Serial.print(activePenPin);
+                    Serial.print("_DELAY");
+                    Serial.print(cruiseDelay);
+                    Serial.print(" ");
                 }
 
                 Serial.print("ok\n");

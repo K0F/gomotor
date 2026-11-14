@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""
+drkota-qwen — Delegate Drkota (GoMotor) V-plotter control to Qwen3-8B on bazina.
+
+Translates natural Czech/English instructions into deterministic `drkota` CLI
+commands using local Qwen3-8B (/no_think mode) and executes them on the plotter.
+
+Usage:
+  drkota-qwen "zvedni pero a vynuluj pozici"
+  drkota-qwen "vykresli čtverec ctverec.svg"
+  drkota-qwen "napiš text AHOJ Z BAZINY"
+  drkota-qwen "pohni oběma motory o 500 kroků a pak zpátky na nulu"
+  drkota-qwen --dry-run "otestuj servo na pinech 11, 12 a 9"
+"""
+
+import sys
+import os
+import json
+import subprocess
+import argparse
+
+QWEN_SUB = os.path.expanduser("~/bin/qwen-sub")
+DRKOTA_BIN = os.path.expanduser("~/bin/drkota")
+
+SYSTEM_PROMPT = """You are the autonomous controller for the Drkota (GoMotor) V-plotter drawing machine.
+Calibration:
+- 10000 steps = 52.5 mm (190.4762 steps/mm)
+- Gondola width = 45 mm, Anchors = (-370, 500) and (370, 500) mm
+- Serial port = /dev/ttyUSB0 on t520 (115200 baud)
+- Pen servo: P1 = UP (180 deg, lifted), P0 = DOWN (90 deg, drawing)
+
+Convert the user's request into a JSON object with this exact schema:
+{
+  "note": "Short 1-sentence Czech explanation of what you will do",
+  "commands": [
+    ["drkota", "status"],
+    ["drkota", "pen", "up"]
+  ]
+}
+
+Allowed commands in the `commands` list:
+- ["drkota", "status"]
+- ["drkota", "pen", "up"]
+- ["drkota", "pen", "down"]
+- ["drkota", "pen", "<angle_5_to_180>"]
+- ["drkota", "pin", "<pin_number_9_10_11_12>"]
+- ["drkota", "speed", "<delay_us_300_to_800>"]
+- ["drkota", "zero"]
+- ["drkota", "jog", "<stepsX>", "<stepsY>"]
+- ["drkota", "enable", "on"] or ["drkota", "enable", "off"]
+- ["drkota", "plot", "<svg_path>"]
+- ["drkota", "text", "<UPPERCASE_TEXT>"]
+- ["drkota", "stop"]
+
+Available SVG files in /home/kof/src/gomotor/:
+- /home/kof/src/gomotor/ctverec.svg
+- /home/kof/src/gomotor/spirala.svg
+- /home/kof/src/gomotor/01.svg
+- /home/kof/src/gomotor/A.svg
+- /home/kof/src/gomotor/kof26.svg
+- /home/kof/src/gomotor/poetry.svg
+- /home/kof/src/gomotor/pozdrav.svg
+
+Return ONLY valid JSON."""
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Qwen3-8B controller for Drkota V-plotter")
+    parser.add_argument("instruction", nargs="+", help="Natural language instruction for Drkota")
+    parser.add_argument("-n", "--dry-run", action="store_true", help="Only print planned commands without executing")
+    args = parser.parse_args()
+
+    task = " ".join(args.instruction).strip()
+    print(f"[drkota-qwen] Asking Qwen3 on bazina: {task!r}...")
+
+    res = subprocess.run(
+        [QWEN_SUB, "--json", "-s", SYSTEM_PROMPT, task],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        sys.stderr.write(res.stderr)
+        sys.exit(res.returncode)
+
+    raw = res.stdout.strip()
+    try:
+        plan = json.loads(raw)
+    except Exception as e:
+        print(f"[drkota-qwen] Failed to parse JSON from Qwen3:\n{raw}\nError: {e}")
+        sys.exit(1)
+
+    note = plan.get("note", "")
+    commands = plan.get("commands", [])
+    print(f"[Qwen3 Plan] {note}")
+    for i, cmd in enumerate(commands, 1):
+        print(f"  {i}. {' '.join(str(x) for x in cmd)}")
+
+    if args.dry_run:
+        return
+
+    for cmd in commands:
+        if not cmd:
+            continue
+        exe = DRKOTA_BIN if cmd[0] == "drkota" else cmd[0]
+        full_cmd = [exe] + [str(x) for x in cmd[1:]]
+        print(f"\n>>> Executing: {' '.join(full_cmd)}")
+        subprocess.run(full_cmd, check=False)
+
+
+if __name__ == "__main__":
+    main()
