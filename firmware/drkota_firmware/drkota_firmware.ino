@@ -9,6 +9,7 @@ const byte Y_DIR_PIN  = 6; // PORTD6
 const byte ENABLE_PIN = 8; // PORTB0
 const byte PEN_PIN_Z  = 11; // Z+ header on CNC shield (Servo)
 const byte PEN_PIN_9  = 9;  // X+ header on CNC shield (fallback / digital)
+const byte ESTOP_PIN  = A0; // CNC Shield Abort / E-Stop button (active LOW to GND)
 
 const bool INVERT_X = false;
 const bool INVERT_Y = false;
@@ -23,6 +24,7 @@ float feedMult = 1.0;
 
 long currentX = 0;
 long currentY = 0;
+bool estopLatch = false;
 
 char serialBuffer[32];
 int bufIndex = 0;
@@ -45,6 +47,7 @@ void setup() {
     pinMode(Y_DIR_PIN, OUTPUT);
     pinMode(ENABLE_PIN, OUTPUT);
     pinMode(PEN_PIN_9, OUTPUT);
+    pinMode(ESTOP_PIN, INPUT_PULLUP);
 
     // Enable stepper drivers (active LOW)
     digitalWrite(ENABLE_PIN, LOW);
@@ -55,6 +58,21 @@ void setup() {
 
     Serial.begin(115200);
     Serial.println("DRKOTA V2 SERVO READY");
+}
+
+bool checkEstopZero() {
+    if (digitalRead(ESTOP_PIN) == LOW) {
+        if (!estopLatch) {
+            estopLatch = true;
+            currentX = 0;
+            currentY = 0;
+            setPenAngle(PEN_UP_ANGLE);
+        }
+        return true;
+    } else {
+        estopLatch = false;
+        return false;
+    }
 }
 
 void stepPlotter(long targetX, long targetY) {
@@ -80,6 +98,20 @@ void stepPlotter(long targetX, long targetY) {
     if (currentDelay < 80) currentDelay = 80;
 
     for (long i = 0; i < maxSteps; i++) {
+        // Check physical E-STOP button (Pin A0) or serial abort ('!' / 'Z') during move
+        if (checkEstopZero()) {
+            return;
+        }
+        if (Serial.available() > 0) {
+            char peekChar = Serial.peek();
+            if (peekChar == '!' || peekChar == 'Z') {
+                currentX = 0;
+                currentY = 0;
+                setPenAngle(PEN_UP_ANGLE);
+                return;
+            }
+        }
+
         overX += stepsX;
         overY += stepsY;
 
@@ -110,8 +142,17 @@ void stepPlotter(long targetX, long targetY) {
 }
 
 void loop() {
+    checkEstopZero();
     while (Serial.available() > 0) {
         char c = Serial.read();
+        if (c == '!') {
+            currentX = 0;
+            currentY = 0;
+            setPenAngle(PEN_UP_ANGLE);
+            bufIndex = 0;
+            Serial.print("ok\n");
+            continue;
+        }
 
         if (c == '\n' || c == '\r') {
             if (bufIndex > 0) {

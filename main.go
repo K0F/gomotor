@@ -846,6 +846,14 @@ func main() {
 		}
 	}
 
+	if globalInterrupted {
+		// E-STOP / Ctrl+C: immediately lift pen and zero current position as new origin (0, 0) without moving back!
+		sendCommand(s, "P1")
+		sendCommand(s, "Z0")
+		fmt.Println("\n[E-STOP] Pohyb zastaven, pero zvednuto (P1) a aktualni pozice vynulovana na (0, 0) [Z0].")
+		return
+	}
+
 	setPenString := 0.0
 	setPenState(s, setPenString)
 	moveLine(s, 0.0, 0.0)

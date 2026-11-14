@@ -129,7 +129,7 @@ def cmd_text(args):
         print("Usage: drkota text <message>")
         sys.exit(1)
     gomotor_dir = os.path.expanduser("~/src/gomotor")
-    subprocess.run(["./gen.sh", text], cwd=gomotor_dir, check=True)
+    subprocess.run(["./gen.sh", text], cwd=gomotor_dir, stdin=subprocess.DEVNULL, check=True)
 
 
 def cmd_plot(args):
@@ -148,10 +148,16 @@ def cmd_plot(args):
 
 
 def cmd_stop(args):
-    subprocess.run(["pkill", "-INT", "-f", "gomotor --file"], check=False)
-    time.sleep(0.2)
-    resp = send_command("P1")
-    print(f"Stopped active plot and lifted pen (P1): {resp}")
+    subprocess.run(["pkill", "-INT", "-f", "gomotor"], check=False)
+    time.sleep(0.3)
+    resp_p = send_command("P1")
+    resp_z = send_command("Z0")
+    try:
+        if os.path.exists("/tmp/drkota_pos.json"):
+            os.remove("/tmp/drkota_pos.json")
+    except Exception:
+        pass
+    print(f"[E-STOP] Stopped active plot, lifted pen (P1: {resp_p}), and zeroed current position to (0, 0) (Z0: {resp_z}).")
 
 
 def main():
@@ -210,8 +216,8 @@ def main():
     p_text.add_argument("words", nargs="+", help="Text string to plot")
     p_text.set_defaults(func=cmd_text)
 
-    # stop
-    p_stop = subparsers.add_parser("stop", help="Stop active plot and lift pen")
+    # stop / estop
+    p_stop = subparsers.add_parser("stop", aliases=["estop"], help="Emergency stop active plot, lift pen, and zero (0, 0)")
     p_stop.set_defaults(func=cmd_stop)
 
     if len(sys.argv) < 2:
