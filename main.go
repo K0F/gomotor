@@ -18,13 +18,13 @@ import (
 )
 
 const (
-	StepsPerMmLeft  = 200.0
-	StepsPerMmRight = 200.0
+	StepsPerMmLeft  = 190.476190476 // 10000 steps = 52.5 mm
+	StepsPerMmRight = 190.476190476 // 10000 steps = 52.5 mm
 	MotorAX         = -370.0
 	MotorBX         = 370.0
 	MotorAY         = 500.0
 	MotorBY         = 500.0
-	gondolaWidth    = 60.0
+	gondolaWidth    = 45.0
 	A4Width         = 210.0
 	A4Height        = 297.0
 	SafetyMargin    = 10.0
@@ -611,13 +611,13 @@ func setPenState(s *serial.Port, mode float64) {
 
 func moveLine(s *serial.Port, targetX, targetY float64) {
 	distance := calculateDistance(currentX, currentY, targetX, targetY)
-	if distance < 0.1 {
+	if distance < 0.05 {
 		return
 	}
 
-	segmentSize := 2.0
+	segmentSize := 4.0
 	if currentPenState == 0.0 {
-		segmentSize = 5.0
+		segmentSize = 8.0
 	}
 
 	segments := math.Ceil(distance / segmentSize)

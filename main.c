@@ -270,20 +270,20 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, handle_sigint);
 
     PlotterConfig cfg = {
-        .motor_ax = 0.0,
-        .motor_ay = 0.0,
-        .motor_bx = 2000.0, // 2 meters between motors
-        .motor_by = 0.0,
-        .steps_per_mm_a = 80.0,
-        .steps_per_mm_b = 80.0,
-        .center_len_a = 1000.0,
-        .center_len_b = 1000.0,
-        .segment_size = 0.5,
+        .motor_ax = -370.0,
+        .motor_ay = 500.0,
+        .motor_bx = 370.0,
+        .motor_by = 500.0,
+        .steps_per_mm_a = 190.476190476, // 10000 steps = 52.5 mm
+        .steps_per_mm_b = 190.476190476,
+        .center_len_a = 610.6605,
+        .center_len_b = 610.6605,
+        .segment_size = 4.0,
         .speed = 300,
         .invert_y = 1,
         .scale = 1.0,
-        .offset_x = 500.0,
-        .offset_y = 500.0
+        .offset_x = 0.0,
+        .offset_y = 0.0
     };
 
     char svg_file[256] = "";

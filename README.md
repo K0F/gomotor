@@ -6,13 +6,13 @@ driver running two NEMA steppers and a pen servo.
 
 ## How it works
 
-Two motors at anchors `(±370, 500)` mm wind strings that hold a 60 mm gondola
+Two motors at anchors `(±370, 500)` mm wind strings that hold a 45 mm gondola
 with the pen. The PC computes the string lengths for each point and sends the
 delta as steps per motor:
 
 ```go
-stepsA := (lenA - centerLenA) * 200 // steps per mm
-stepsB := (lenB - centerLenB) * 200
+stepsA := (lenA - centerLenA) * 190.476190476 // 10000 steps = 52.5 mm
+stepsB := (lenB - centerLenB) * 190.476190476
 ```
 
 ## Files
@@ -69,7 +69,7 @@ The Gomotor font and `gen_font.py` are Copyright (c) 2026 KOF. All rights reserv
 
 ## Geometry
 
-Anchors at `(±370, 500)` mm, gondola width 60 mm, 200 steps/mm, A4 paper with a
+Anchors at `(±370, 500)` mm, gondola width 45 mm, 190.4762 steps/mm (10000 steps = 52.5 mm), A4 paper with a
 10 mm safety margin. Pin assignments and direction inversion are set in
 `gomotor_driver.ino`.
 

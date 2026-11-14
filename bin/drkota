@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""
+drkota — Unified CLI control tool for Drkota (GoMotor) V-plotter
+"""
+import sys, os, time, subprocess, argparse
+
+PORT = os.environ.get("DRKOTA_PORT", "/dev/ttyUSB0")
+BAUD = int(os.environ.get("DRKOTA_BAUD", 115200))
+GOMOTOR_BIN = os.path.expanduser("~/src/gomotor/gomotor")
+
+def send_command(cmd, timeout=2.0, port=PORT, baud=BAUD):
+    import serial
+    if not os.path.exists(port):
+        print(f"Error: Port {port} does not exist.")
+        sys.exit(1)
+    try:
+        s = serial.Serial(port, baud, timeout=timeout)
+        time.sleep(0.1)
+        s.reset_input_buffer()
+        payload = (cmd.strip() + "\n").encode("ascii")
+        s.write(payload)
+        s.flush()
+        resp = s.readline().decode("ascii", errors="replace").strip()
+        s.close()
+        return resp
+    except Exception as e:
+        print(f"Serial Error on {port}: {e}")
+        sys.exit(1)
+
+def cmd_status(args):
+    import serial
+    if not os.path.exists(PORT):
+        print(f"Status: OFFLINE (Port {PORT} not connected)")
+        return
+    print(f"Connecting to {PORT} at {BAUD} baud...")
+    try:
+        s = serial.Serial(PORT, BAUD, timeout=1.5)
+        # Pulse DTR to see if board announces itself
+        s.dtr = False
+        time.sleep(0.05)
+        s.dtr = True
+        time.sleep(0.5)
+        boot_msg = s.read(s.in_waiting or 0).decode("ascii", errors="replace").strip()
+        if boot_msg:
+            print(f"Boot msg: {boot_msg}")
+        s.write(b"\n")
+        time.sleep(0.1)
+        resp = s.readline().decode("ascii", errors="replace").strip()
+        s.close()
+        print(f"Status: ONLINE (Response: {resp or 'no response to empty line'})")
+    except Exception as e:
+        print(f"Status: ERROR ({e})")
+
+def cmd_pen(args):
+    action = args.action.lower()
+    if action == "up":
+        resp = send_command("P1")
+        print(f"Pen UP (P1): {resp}")
+    elif action == "down":
+        resp = send_command("P0")
+        print(f"Pen DOWN (P0): {resp}")
+    else:
+        try:
+            val = int(action)
+            resp = send_command(f"P{val}")
+            print(f"Pen Angle {val}°: {resp}")
+        except ValueError:
+            print("Usage: drkota pen [up|down|<angle 10-180>]")
+
+def cmd_jog(args):
+    dx = int(args.dx)
+    dy = int(args.dy)
+    cmd = f"X{dx}Y{dy}"
+    print(f"Jogging {cmd}...")
+    resp = send_command(cmd, timeout=10.0)
+    print(f"Result: {resp}")
+
+def cmd_zero(args):
+    resp = send_command("Z0")
+    print(f"Coordinates Zeroed: {resp}")
+
+def cmd_enable(args):
+    en = 1 if args.state.lower() in ["on", "1", "true"] else 0
+    resp = send_command(f"E{en}")
+    print(f"Steppers Enabled={en}: {resp}")
+
+def cmd_flash(args):
+    mode = args.board or "uno"
+    flasher = os.path.expanduser("~/bin/drkota-flash")
+    subprocess.run([flasher, mode], check=True)
+
+def cmd_plot(args):
+    svg_file = args.file
+    if not os.path.exists(svg_file):
+        print(f"Error: File {svg_file} does not exist.")
+        sys.exit(1)
+    if not os.path.exists(GOMOTOR_BIN):
+        print(f"Building {GOMOTOR_BIN}...")
+        subprocess.run(["go", "build", "-o", GOMOTOR_BIN, "main.go"], cwd=os.path.expanduser("~/src/gomotor"), check=True)
+    cmd = [GOMOTOR_BIN, "--file", svg_file, "--port", PORT, "--center", "--fit"]
+    if args.extra:
+        cmd.extend(args.extra)
+    print(f"Executing: {' '.join(cmd)}")
+    subprocess.run(cmd)
+
+def main():
+    parser = argparse.ArgumentParser(description="Drkota (GoMotor) V-Plotter CLI Controller")
+    subparsers = parser.add_subparsers(dest="subcommand", help="Subcommand")
+
+    # status
+    p_status = subparsers.add_parser("status", help="Check hardware connection")
+    p_status.set_defaults(func=cmd_status)
+
+    # pen
+    p_pen = subparsers.add_parser("pen", help="Control pen servo [up|down|<angle>]")
+    p_pen.add_argument("action", help="up, down, or angle (10-180)")
+    p_pen.set_defaults(func=cmd_pen)
+
+    # jog
+    p_jog = subparsers.add_parser("jog", help="Relative jog steps [dx dy]")
+    p_jog.add_argument("dx", type=int, help="Steps for Motor A (X)")
+    p_jog.add_argument("dy", type=int, help="Steps for Motor B (Y)")
+    p_jog.set_defaults(func=cmd_jog)
+
+    # zero
+    p_zero = subparsers.add_parser("zero", help="Set origin (0, 0)")
+    p_zero.set_defaults(func=cmd_zero)
+
+    # enable
+    p_enable = subparsers.add_parser("enable", help="Enable or disable steppers")
+    p_enable.add_argument("state", help="on or off")
+    p_enable.set_defaults(func=cmd_enable)
+
+    # flash
+    p_flash = subparsers.add_parser("flash", help="Upload firmware via drkota-flash")
+    p_flash.add_argument("board", nargs="?", default="uno", help="uno (default, 115200), nano-old (57600), nano-new, or nano168")
+    p_flash.set_defaults(func=cmd_flash)
+
+    # plot
+    p_plot = subparsers.add_parser("plot", help="Plot an SVG file")
+    p_plot.add_argument("file", help="Path to SVG file")
+    p_plot.add_argument("extra", nargs=argparse.REMAINDER, help="Extra flags passed to gomotor")
+    p_plot.set_defaults(func=cmd_plot)
+
+    if len(sys.argv) < 2:
+        parser.print_help()
+        sys.exit(0)
+
+    args = parser.parse_args()
+    if hasattr(args, "func"):
+        args.func(args)
+    else:
+        parser.print_help()
+
+if __name__ == "__main__":
+    main()

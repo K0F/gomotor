@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# drkota-flash — Interactive manual-reset firmware uploader for Drkota (GoMotor)
+set -e
+
+PORT="${DRKOTA_PORT:-/dev/ttyUSB0}"
+SKETCH_DIR="$HOME/src/gomotor/firmware/drkota_firmware"
+ARDUINO_CLI="$HOME/bin/arduino-cli"
+
+MODE="${1:-uno}"
+
+case "$MODE" in
+    uno)
+        FQBN="arduino:avr:uno"
+        DESC="Arduino Uno (ATmega328P, 115200 baud)"
+        ;;
+    nano-old|old)
+        FQBN="arduino:avr:nano:cpu=atmega328old"
+        DESC="Arduino Nano (ATmega328P Old Bootloader, 57600 baud)"
+        ;;
+    nano-new|new|nano)
+        FQBN="arduino:avr:nano:cpu=atmega328"
+        DESC="Arduino Nano (ATmega328P New Bootloader, 115200 baud)"
+        ;;
+    nano168|168)
+        FQBN="arduino:avr:nano:cpu=atmega168"
+        DESC="Arduino Nano (ATmega168, 19200 baud)"
+        ;;
+    *)
+        echo "Usage: drkota-flash [nano-old|nano-new|uno|nano168]"
+        exit 1
+        ;;
+esac
+
+echo "============================================================"
+echo "          DRKOTA (GOMOTOR) FIRMWARE FLASHER"
+echo "============================================================"
+echo "Port:   $PORT"
+echo "Target: $DESC"
+echo "Sketch: $SKETCH_DIR"
+echo "============================================================"
+
+if [ ! -e "$PORT" ]; then
+    echo "ERROR: Serial port $PORT not found!"
+    exit 1
+fi
+
+echo "[1/2] Compiling firmware..."
+"$ARDUINO_CLI" compile --fqbn "$FQBN" "$SKETCH_DIR"
+echo "Compilation successful."
+
+echo ""
+echo "============================================================"
+echo "   MANUAL RESET SYNC PROCEDURE:"
+echo "   1. Physically HOLD DOWN the RESET button on the Arduino."
+echo "   2. Press [ENTER] in this terminal."
+echo "   3. Immediately RELEASE the RESET button when you see 'BURNING'!"
+echo "============================================================"
+echo ""
+read -p ">>> HOLD RESET and press [ENTER] to burn... " _unused
+
+echo ""
+echo ">>> BURNING! RELEASE RESET BUTTON NOW! <<<"
+echo ""
+
+"$ARDUINO_CLI" upload -p "$PORT" --fqbn "$FQBN" -v "$SKETCH_DIR"
+
+echo ""
+echo "============================================================"
+echo "SUCCESS: Firmware successfully uploaded to Drkota!"
+echo "============================================================"

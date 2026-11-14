@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""
+drkota-motor: CLI nástroj pro kalibraci a rozhýbání krokových motorů V-plotteru (Drkota).
+Komunikuje s Arduino CNC Shieldem přes /dev/ttyUSB0 (lokálně nebo transparentně přes SSH na t520).
+"""
+
+import sys
+import os
+import time
+import json
+import subprocess
+import argparse
+
+BAUD_RATE = 115200
+DEFAULT_PORT = "/dev/ttyUSB0"
+STATE_FILE = "/tmp/drkota_pos.json"
+
+def get_target_host():
+    """Vrátí 'local', pokud ttyUSB0 existuje lokálně, jinak 't520'."""
+    if os.path.exists(DEFAULT_PORT):
+        return "local"
+    # Zkontroluj, zda ttyUSB0 existuje na t520
+    try:
+        res = subprocess.run(["ssh", "-q", "t520", "test -e " + DEFAULT_PORT], timeout=3)
+        if res.returncode == 0:
+            return "t520"
+    except Exception:
+        pass
+    return "local"
+
+def run_remote_if_needed():
+    target = get_target_host()
+    if target == "t520" and os.uname().nodename != "t520":
+        # Spusť tento skript na t520 se stejnými argumenty
+        cmd = ["ssh", "-t", "t520", "python3 - " + " ".join([f'"{a}"' for a in sys.argv[1:]])]
+        # Pošli obsah tohoto skriptu na stdin
+        with open(__file__, "rb") as f:
+            code = f.read()
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        p.communicate(input=code)
+        sys.exit(p.returncode)
+
+run_remote_if_needed()
+
+# --- Zde již běžíme přímo na stroji s připojeným hardwarem ---
+import serial
+
+def load_pos():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                d = json.load(f)
+                return d.get("x", 0), d.get("y", 0)
+        except Exception:
+            pass
+    return 0, 0
+
+def save_pos(x, y):
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump({"x": x, "y": y}, f)
+    except Exception:
+        pass
+
+def open_serial(port=DEFAULT_PORT, timeout=5):
+    if not os.path.exists(port):
+        print(f"[CHYBA] Sériový port {port} neexistuje!")
+        sys.exit(1)
+    s = serial.Serial(port, BAUD_RATE, timeout=timeout)
+    time.sleep(1.8) # čekání na bootloader / DTR reset
+    s.reset_input_buffer()
+    return s
+
+def send_cmd(s, cmd):
+    clean = cmd.strip()
+    s.write((clean + "\n").encode("utf-8"))
+    resp = s.readline().decode("utf-8", errors="ignore").strip()
+    return resp
+
+def cmd_status(args):
+    print(f"=== Drkota Motor Status ===")
+    print(f"Host: {os.uname().nodename}")
+    print(f"Port: {args.port} @ {BAUD_RATE} baud")
+    cur_x, cur_y = load_pos()
+    print(f"Uložená pozice: X={cur_x}, Y={cur_y} kroků")
+    
+    try:
+        s = open_serial(args.port, timeout=2)
+        resp = send_cmd(s, "P0")
+        s.close()
+        if resp == "ok":
+            print("Odezva Arduina: [OK] (Spojení je aktivní a funkční)")
+        else:
+            print(f"Odezva Arduina: [{resp}] (Neočekávaná odezva)")
+    except Exception as e:
+        print(f"Chyba spojení: {e}")
+
+def cmd_zero(args):
+    """Resetuje Arduino a nastaví software počátek na 0,0."""
+    print("Resetuji software pozici a Arduino...")
+    try:
+        s = serial.Serial(args.port, BAUD_RATE, timeout=1)
+        s.setDTR(False)
+        time.sleep(0.1)
+        s.setDTR(True)
+        time.sleep(1.5)
+        s.close()
+        save_pos(0, 0)
+        print("Pozice resetována na X=0, Y=0. Motory jsou v nulovém bodě.")
+    except Exception as e:
+        print(f"Chyba při resetu: {e}")
+
+def cmd_jog(args):
+    """Posune motory o relativní počet kroků."""
+    dx = args.dx
+    dy = args.dy
+    cur_x, cur_y = load_pos()
+    target_x = cur_x + dx
+    target_y = cur_y + dy
+    
+    print(f"Posun o rel: dX={dx:+d}, dY={dy:+d} -> Cíl: X={target_x}, Y={target_y}")
+    s = open_serial(args.port, timeout=10)
+    cmd = f"X{target_x}Y{target_y}"
+    print(f"Odesílám: {cmd}")
+    resp = send_cmd(s, cmd)
+    s.close()
+    
+    if resp == "ok":
+        save_pos(target_x, target_y)
+        print("Pohyb dokončen: [OK]")
+    else:
+        print(f"Chyba odezvy: {resp}")
+
+def cmd_spin(args):
+    """Roztočí zvolený motor o daný počet kroků."""
+    motor = args.motor.lower()
+    steps = args.steps
+    dx, dy = 0, 0
+    if motor in ("x", "left", "l", "1"):
+        dx = steps
+    elif motor in ("y", "right", "r", "2"):
+        dy = steps
+    elif motor in ("both", "xy", "all"):
+        dx = steps
+        dy = steps
+    else:
+        print(f"Neznámý motor: {motor}. Použij 'x', 'y' nebo 'both'.")
+        return
+
+    cur_x, cur_y = load_pos()
+    target_x = cur_x + dx
+    target_y = cur_y + dy
+
+    print(f"Spin motor {motor.upper()} o {steps:+d} kroků...")
+    s = open_serial(args.port, timeout=15)
+    resp = send_cmd(s, f"X{target_x}Y{target_y}")
+    s.close()
+    if resp == "ok":
+        save_pos(target_x, target_y)
+        print(f"Spin dokončen: [OK]")
+    else:
+        print(f"Chyba odezvy: {resp}")
+
+def cmd_test(args):
+    """Otestuje oba motory pohybem tam a zpět (800 kroků)."""
+    steps = args.steps
+    print(f"=== Spouštím diagnostický test motorů ({steps} kroků) ===")
+    print("1. Krok: Motor X (levý) dopředu...")
+    s = open_serial(args.port, timeout=10)
+    
+    cur_x, cur_y = load_pos()
+    
+    # 1. X forward
+    send_cmd(s, f"X{cur_x + steps}Y{cur_y}")
+    time.sleep(0.3)
+    
+    # 2. X backward
+    print("2. Krok: Motor X (levý) zpět...")
+    send_cmd(s, f"X{cur_x}Y{cur_y}")
+    time.sleep(0.3)
+    
+    # 3. Y forward
+    print("3. Krok: Motor Y (pravý) dopředu...")
+    send_cmd(s, f"X{cur_x}Y{cur_y + steps}")
+    time.sleep(0.3)
+    
+    # 4. Y backward
+    print("4. Krok: Motor Y (pravý) zpět...")
+    send_cmd(s, f"X{cur_x}Y{cur_y}")
+    time.sleep(0.3)
+
+    # 5. Both forward
+    print("5. Krok: Oba motory současně dopředu a zpět...")
+    send_cmd(s, f"X{cur_x + steps}Y{cur_y + steps}")
+    time.sleep(0.3)
+    send_cmd(s, f"X{cur_x}Y{cur_y}")
+    
+    s.close()
+    print("=== Diagnostický test motorů úspěšně dokončen! ===")
+
+def cmd_calib(args):
+    """Vypočítá kroky na milimetr na základě fyzického měření."""
+    steps = args.steps
+    measured_mm = args.measured_mm
+    if measured_mm <= 0:
+        print("[CHYBA] Naměřené milimetry musí být větší než 0!")
+        return
+
+    steps_per_mm = steps / measured_mm
+    print(f"\n=== Výpočet kalibrace StepsPerMm ===")
+    print(f"Zadaný posun: {steps} kroků")
+    print(f"Skutečně naměřeno posuvným měřítkem / metrem: {measured_mm:.2f} mm")
+    print(f"-> Skutečná hodnota: StepsPerMm = {steps_per_mm:.4f} kroků/mm\n")
+    
+    # Porovnání se standardními řemenicemi GT2 (20 zubů = 40 mm/otáčka)
+    rev_mm = 40.0
+    steps_per_rev = steps_per_mm * rev_mm
+    print(f"Při GT2 řemenici (40 mm/ot) to odpovídá cca {steps_per_rev:.0f} krokům na otáčku:")
+    if abs(steps_per_rev - 200) < 30:
+        print("  -> Pravděpodobně ZÁKLADNÍ KROK (Full-step, bez mikrokrokování, cca 5 kroků/mm)")
+    elif abs(steps_per_rev - 400) < 50:
+        print("  -> Pravděpodobně 1/2 mikrokrok (cca 10 kroků/mm)")
+    elif abs(steps_per_rev - 800) < 100:
+        print("  -> Pravděpodobně 1/4 mikrokrok (cca 20 kroků/mm)")
+    elif abs(steps_per_rev - 1600) < 200:
+        print("  -> Pravděpodobně 1/8 mikrokrok (cca 40 kroků/mm)")
+    elif abs(steps_per_rev - 3200) < 300:
+        print("  -> Pravděpodobně 1/16 mikrokrok (cca 80 kroků/mm)")
+    else:
+        print(f"  -> Vlastní převod / cívka.")
+
+def cmd_interactive(args):
+    """Interaktivní ovládání z klávesnice."""
+    import tty, termios
+    
+    print("=== Interaktivní režim motorů ===")
+    print("Ovládání:")
+    print("  [A] / [D] : Motor X (levý) - / +")
+    print("  [W] / [S] : Motor Y (pravý) + / -")
+    print("  [J] / [L] : Oba motory - / +")
+    print("  [1] 10 kroků | [2] 50 kroků | [3] 200 kroků (1 ot) | [4] 800 kroků")
+    print("  [Z] Vynulovat pozici")
+    print("  [Q] Konec")
+
+    step_size = 200
+    s = open_serial(args.port, timeout=5)
+    cur_x, cur_y = load_pos()
+    
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch.lower() == 'q' or ch == '\x03': # Ctrl+C or Q
+                break
+            elif ch == '1':
+                step_size = 10
+            elif ch == '2':
+                step_size = 50
+            elif ch == '3':
+                step_size = 200
+            elif ch == '4':
+                step_size = 800
+            elif ch == 'z' or ch == 'Z':
+                cur_x, cur_y = 0, 0
+                save_pos(0, 0)
+            else:
+                dx, dy = 0, 0
+                if ch in ('a', 'A'):
+                    dx = -step_size
+                elif ch in ('d', 'D'):
+                    dx = step_size
+                elif ch in ('w', 'W'):
+                    dy = step_size
+                elif ch in ('s', 'S'):
+                    dy = -step_size
+                elif ch in ('j', 'J'):
+                    dx = -step_size
+                    dy = -step_size
+                elif ch in ('l', 'L'):
+                    dx = step_size
+                    dy = step_size
+                
+                if dx != 0 or dy != 0:
+                    cur_x += dx
+                    cur_y += dy
+                    send_cmd(s, f"X{cur_x}Y{cur_y}")
+                    save_pos(cur_x, cur_y)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        s.close()
+    print(f"\nUkončeno. Aktuální pozice: X={cur_x}, Y={cur_y}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Drkota Motor CLI Tool")
+    parser.add_argument("--port", default=DEFAULT_PORT, help="Sériový port (výchozí /dev/ttyUSB0)")
+    sub = parser.add_subparsers(dest="subcommand")
+
+    sub.add_parser("status", help="Ověřit stav a spojení")
+    sub.add_parser("zero", help="Vynulovat pozici")
+    
+    p_jog = sub.add_parser("jog", help="Relativní posun dX dY kroků")
+    p_jog.add_argument("dx", type=int, help="Kroky X")
+    p_jog.add_argument("dy", type=int, help="Kroky Y")
+
+    p_spin = sub.add_parser("spin", help="Roztočit motor o N kroků")
+    p_spin.add_argument("motor", choices=["x", "y", "both"], help="Který motor")
+    p_spin.add_argument("steps", type=int, help="Počet kroků")
+
+    p_test = sub.add_parser("test", help="Diagnostický test motorů")
+    p_test.add_argument("--steps", type=int, default=800, help="Počet kroků pro test")
+
+    p_calib = sub.add_parser("calib", help="Výpočet StepsPerMm z měření")
+    p_calib.add_argument("steps", type=float, help="Zadané kroky")
+    p_calib.add_argument("measured_mm", type=float, help="Naměřená vzdálenost v mm")
+
+    sub.add_parser("interactive", help="Interaktivní řízení z klávesnice")
+
+    args = parser.parse_args()
+    if not args.subcommand:
+        parser.print_help()
+        return
+
+    cmds = {
+        "status": cmd_status,
+        "zero": cmd_zero,
+        "jog": cmd_jog,
+        "spin": cmd_spin,
+        "test": cmd_test,
+        "calib": cmd_calib,
+        "interactive": cmd_interactive,
+    }
+    cmds[args.subcommand](args)
+
+if __name__ == "__main__":
+    main()

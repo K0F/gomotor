@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""
+drkota-sync — Continuous STK500 sync hunter for manual reset timing
+"""
+import sys, time, serial
+
+PORT = "/dev/ttyUSB0"
+BAUD = int(sys.argv[1]) if len(sys.argv) > 1 else 115200
+
+print(f"============================================================")
+print(f"       DRKOTA CONTINUOUS SYNC HUNTER ({BAUD} baud)")
+print(f"============================================================")
+print(f"Spamming STK_GET_SYNC (0x30 0x20) every 25ms...")
+print(f"PRESS AND RELEASE THE RESET BUTTON ON THE ARDUINO!")
+print(f"(Press Ctrl+C to abort)")
+print(f"============================================================\n")
+
+try:
+    s = serial.Serial(PORT, BAUD, timeout=0.03)
+except Exception as e:
+    print(f"Error opening {PORT}: {e}")
+    sys.exit(1)
+
+attempt = 0
+found = False
+
+try:
+    while True:
+        attempt += 1
+        s.reset_input_buffer()
+        s.write(b"0 ")
+        time.sleep(0.025)
+        resp = s.read(16)
+        if resp:
+            print(f"[{attempt:5d}] Received: {repr(resp)}")
+            if b"\x14\x10" in resp:
+                print("\n" + "="*60)
+                print(">>> STK500 SYNC CONFIRMED (0x14 0x10)! <<<")
+                print("Bootloader is alive and responding on this baud rate!")
+                print("="*60)
+                found = True
+                break
+        elif attempt % 80 == 0:
+            print(f"[{attempt:5d}] Still listening... tap RESET button on Arduino.")
+except KeyboardInterrupt:
+    print("\nAborted by user.")
+finally:
+    s.close()
+
+if found:
+    sys.exit(0)
+else:
+    sys.exit(1)
