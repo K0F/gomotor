@@ -275,7 +275,7 @@ def main():
     fb.setupHorizontalMetrics(metrics)
     fb.setupHorizontalHeader(ascent=ascent, descent=descent)
     fb.setupNameTable({
-        "copyright": "Copyright (c) 2026 KOF",
+        "copyright": "Copyleft 🄯 2026 Kof",
         "familyName": "Gomotor",
         "styleName": "Regular",
         "uniqueFontIdentifier": "Gomotor Regular 0.1",

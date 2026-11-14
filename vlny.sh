@@ -21,6 +21,6 @@ echo "$count" > "$STATE_FILE"
 
 cat ~/2026/07-cerven/motorizovanaKresba01/motorizovanaKresba01.pde | ./gen.sh
 #./gomotor --speed 75 --feed 1.0 --file /home/kof/2026/07-cerven/motorizovanaKresba01/01.svg
-./gomotor --center --scale=0.5 --file /home/kof/2026/07-cerven/motorizovanaKresba01/01.svg
+./gomotor --center --scale=0.25 --file /home/kof/2026/07-cerven/motorizovanaKresba01/01.svg
 echo "$count/100" | ./gen.sh
 

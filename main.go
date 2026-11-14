@@ -598,11 +598,13 @@ func setPenState(s *serial.Port, mode float64) {
 		return
 	}
 	if mode == 0.0 {
-		sendCommand(s, "P0")
-		time.Sleep(300 * time.Millisecond) // Prodleva pro dojetí serva (pen up)
-	} else if mode == 1.0 {
+		// Mode 0 = travel: 1 zvedá pero od plochy (pen UP)
 		sendCommand(s, "P1")
-		time.Sleep(300 * time.Millisecond) // Prodleva pro spuštění tužky (pen down)
+		time.Sleep(300 * time.Millisecond)
+	} else if mode == 1.0 {
+		// Mode 1 = drawing: 0 pokládá pero na plochu (pen DOWN)
+		sendCommand(s, "P0")
+		time.Sleep(300 * time.Millisecond)
 	}
 	currentPenState = mode
 }

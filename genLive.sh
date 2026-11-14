@@ -2,7 +2,7 @@
 
 Y_POS=10
 SCALE=2.5
-Y_STEP=160
+Y_STEP=190
 
 process_line() {
     local line="$1"

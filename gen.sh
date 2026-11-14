@@ -1,7 +1,7 @@
 #!/bin/bash
 
 Y_POS=10
-SCALE=1
+SCALE=0.5
 
 if [ ! -t 0 ]; then
     TEXT="$(cat)"
@@ -15,5 +15,5 @@ rm -f vystup.svg
 go run gen.go -text="$TEXT" -y="$Y_POS" -scale="$SCALE" -out=vystup.svg
 
 if [ -f "vystup.svg" ]; then
-    go run ./main.go --file="vystup.svg" --center --speed=600 --scale=0.15
+    go run ./main.go --file="vystup.svg" --center --speed=600 --scale=$SCALE
 fi
