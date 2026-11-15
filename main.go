@@ -611,7 +611,7 @@ func setPenState(s *serial.Port, mode float64) {
 
 func moveLine(s *serial.Port, targetX, targetY float64) {
 	distance := calculateDistance(currentX, currentY, targetX, targetY)
-	if distance < 0.05 {
+	if distance < 0.01 {
 		return
 	}
 
