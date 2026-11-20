@@ -854,7 +854,10 @@ func main() {
 		return
 	}
 
-	setPenString := 0.0
-	setPenState(s, setPenString)
+	// Always lift pen and return to origin (0, 0) after plotting
+	setPenState(s, 0.0)
 	moveLine(s, 0.0, 0.0)
+	sendCommand(s, "P1")
+	time.Sleep(500 * time.Millisecond)
+	fmt.Println("\n[drkota] Tisk dokončen: pero zvednuto (P1), návrat do počátku (0, 0).")
 }
