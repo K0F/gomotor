@@ -13,7 +13,7 @@ import re
 CHAR_W = 2.0
 CHAR_H = 3.2
 CHAR_GAP = 0.7
-LINE_H = 5.4
+LINE_H = 10.0
 MAX_LINE_W = 175.0
 
 # Vector stroke font (normalized 0..40 x 0..50 coordinates, matching gen.go + lowercase & punctuation)

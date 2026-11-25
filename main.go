@@ -802,7 +802,7 @@ func main() {
 		svgCenterY = minY + (svgHeight / 2.0)
 	}
 
-	c := &serial.Config{Name: *portName, Baud: 115200}
+	c := &serial.Config{Name: *portName, Baud: 115200, ReadTimeout: time.Second * 5}
 	s, err := serial.OpenPort(c)
 	if err != nil {
 		log.Fatal(err)
@@ -811,8 +811,21 @@ func main() {
 
 	time.Sleep(2 * time.Second)
 
+	// Flush any bootloader noise and synchronize handshake
+	s.Flush()
+	for attempt := 0; attempt < 10; attempt++ {
+		s.Write([]byte("V\n"))
+		time.Sleep(200 * time.Millisecond)
+		buf := make([]byte, 64)
+		n, _ := s.Read(buf)
+		if n > 0 && strings.Contains(string(buf[:n]), "ok") {
+			break
+		}
+	}
+
 	sendCommand(s, fmt.Sprintf("S%d", *speed))
 	sendCommand(s, fmt.Sprintf("F%.2f", *feed))
+	sendCommand(s, "E1") // Always ensure stepper drivers are enabled (active LOW on CNC Shield)
 
 	setPenState(s, 0.0)
 
