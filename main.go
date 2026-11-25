@@ -863,7 +863,8 @@ func main() {
 		// E-STOP / Ctrl+C: immediately lift pen and zero current position as new origin (0, 0) without moving back!
 		sendCommand(s, "P1")
 		sendCommand(s, "Z0")
-		fmt.Println("\n[E-STOP] Pohyb zastaven, pero zvednuto (P1) a aktualni pozice vynulovana na (0, 0) [Z0].")
+		sendCommand(s, "E0") // Disable coils on E-stop
+		fmt.Println("\n[E-STOP] Pohyb zastaven, pero zvednuto (P1), aktualni pozice vynulovana na (0, 0) [Z0] a buzeni vypnuto (E0).")
 		return
 	}
 
@@ -872,5 +873,6 @@ func main() {
 	moveLine(s, 0.0, 0.0)
 	sendCommand(s, "P1")
 	time.Sleep(500 * time.Millisecond)
-	fmt.Println("\n[drkota] Tisk dokončen: pero zvednuto (P1), návrat do počátku (0, 0).")
+	sendCommand(s, "E0") // Disable coil excitation so motors do not squeal in standby
+	fmt.Println("\n[drkota] Tisk dokončen: pero zvednuto (P1), návrat do počátku (0, 0) a buzení cívek vypnuto (E0 standby).")
 }
